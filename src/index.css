@@ -1,0 +1,431 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Inter, Arial, sans-serif;
+  background: #f4f7fb;
+  color: #172033;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.app {
+  min-height: 100vh;
+}
+
+.header {
+  background: #111827;
+  color: white;
+  padding: 18px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.logo {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 1px;
+}
+
+.headerSub {
+  font-size: 12px;
+  opacity: 0.7;
+  margin-top: 3px;
+}
+
+.headerIcon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.12);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+}
+
+.container {
+  width: 100%;
+  max-width: 650px;
+  margin: auto;
+  padding: 16px;
+}
+
+.card {
+  background: white;
+  border-radius: 20px;
+  padding: 20px;
+  margin-bottom: 16px;
+  box-shadow: 0 5px 20px rgba(0,0,0,0.06);
+}
+
+.sectionTitle {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.iconCircle {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: #eef2ff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 21px;
+  flex-shrink: 0;
+}
+
+.sectionTitle h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.sectionTitle p {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #7b8494;
+}
+
+.searchRow {
+  display: flex;
+  gap: 9px;
+}
+
+.searchRow input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #d9dee8;
+  border-radius: 12px;
+  padding: 14px;
+  outline: none;
+  background: #fafbfc;
+}
+
+.searchRow input:focus {
+  border-color: #6b7280;
+  background: white;
+}
+
+.searchRow button {
+  border: 0;
+  border-radius: 12px;
+  padding: 0 18px;
+  cursor: pointer;
+  font-weight: 700;
+  background: #111827;
+  color: white;
+}
+
+.successBox {
+  margin-top: 16px;
+  border-radius: 15px;
+  padding: 15px;
+  background: #f7faf8;
+  border: 1px solid #dcefe2;
+}
+
+.verified {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.infoRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  padding: 10px 0;
+  border-bottom: 1px solid #e7ebe8;
+  font-size: 13px;
+}
+
+.infoRow:last-child {
+  border-bottom: 0;
+}
+
+.infoRow span {
+  color: #737b87;
+}
+
+.infoRow strong {
+  text-align: right;
+}
+
+.vehicleMain {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 5px;
+}
+
+.vehicleMain strong {
+  font-size: 21px;
+}
+
+.vehicleMain span {
+  color: #737b87;
+  font-size: 13px;
+  margin-top: 3px;
+}
+
+.errorMessage {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #fff4f4;
+  color: #b42318;
+  font-size: 13px;
+}
+
+.complaintCard {
+  margin-bottom: 30px;
+}
+
+.comingSoon {
+  text-align: center;
+  padding: 20px 10px 10px;
+}
+
+.bigIcon {
+  font-size: 42px;
+}
+
+.comingSoon h3 {
+  margin: 10px 0 5px;
+}
+
+.comingSoon p {
+  margin: 0 auto 18px;
+  max-width: 350px;
+  color: #737b87;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.addButton {
+  border: 0;
+  border-radius: 12px;
+  padding: 13px 20px;
+  background: #e5e7eb;
+  color: #9ca3af;
+  font-weight: 700;
+}
+
+footer {
+  text-align: center;
+  color: #8a93a1;
+  font-size: 11px;
+  padding: 0 20px 25px;
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 12px;
+  }
+
+  .card {
+    padding: 16px;
+    border-radius: 17px;
+  }
+
+  .searchRow button {
+    padding: 0 14px;
+  }
+
+  .infoRow {
+    font-size: 12px;
+  }
+}
+.saveMessage {
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f1f8f4;
+  color: #176b3a;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.submitButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.modeSwitch {
+  max-width: 650px;
+  margin: 14px auto 0;
+  padding: 0 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.modeButton {
+  flex: 1;
+  border: 1px solid #d9dee8;
+  background: white;
+  color: #555;
+  padding: 12px;
+  border-radius: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.activeMode {
+  background: #111827;
+  color: white;
+  border-color: #111827;
+}
+
+.adminSectionTitle {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 17px;
+  font-weight: 800;
+  margin-bottom: 15px;
+}
+
+.adminSectionTitle span {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 20px;
+  background: #eef2f7;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+}
+
+.completedTitle {
+  margin-top: 5px;
+}
+
+.adminComplaint {
+  border: 1px solid #e1e5eb;
+  border-radius: 15px;
+  padding: 15px;
+  margin-bottom: 12px;
+  background: #fafbfc;
+}
+
+.adminComplaintTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.adminComplaintTop strong {
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.pendingBadge,
+.completedBadge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 5px 8px;
+  border-radius: 8px;
+}
+
+.pendingBadge {
+  background: #fff1f1;
+  color: #c62828;
+}
+
+.completedBadge {
+  background: #edf8f0;
+  color: #18723d;
+}
+
+.adminInfo {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 0;
+  border-bottom: 1px solid #e7ebef;
+  font-size: 12px;
+}
+
+.adminInfo span {
+  color: #747d8a;
+}
+
+.adminInfo strong {
+  text-align: right;
+}
+
+.daysBox {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #fff7e8;
+  color: #8a5700;
+  font-size: 13px;
+}
+
+.completedDays {
+  background: #edf8f0;
+  color: #18723d;
+}
+
+.completeRow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.completeRow input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #d9dee8;
+  border-radius: 10px;
+  padding: 11px;
+  background: white;
+}
+
+.completeButton {
+  border: none;
+  border-radius: 10px;
+  padding: 0 14px;
+  background: #18723d;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.emptyState {
+  text-align: center;
+  padding: 25px 10px;
+  color: #8a93a1;
+  font-size: 13px;
+}
+
+.completedCard {
+  background: #f8fcf9;
+}
+
+@media (max-width: 480px) {
+  .completeRow {
+    flex-direction: column;
+  }
+
+  .completeButton {
+    padding: 13px;
+  }
+
+  .adminComplaintTop {
+    flex-direction: column;
+  }
+}
