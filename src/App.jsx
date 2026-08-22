@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
+import spicDriveLogo from './assets/spicdrive-logo.jpg';
 import './App.css';
 
 /* =====================================================
@@ -8,6 +9,7 @@ import './App.css';
 function DriverScreen({
   gsNo, setGsNo, employee, employeeMessage, employeeLoading, findEmployee,
   vehicleNo, setVehicleNo, vehicle, vehicleMessage, vehicleLoading, findVehicle,
+  complaintDate, setComplaintDate, maxComplaintDate,
   complaints, updateComplaint, addComplaint, removeComplaint,
   submitComplaints, saving, saveMessage,
 }) {
@@ -136,6 +138,17 @@ function DriverScreen({
           </div>
         ))}
 
+        <div className="dateField">
+          <label className="fieldLabel" htmlFor="complaintDate">Complaint Date</label>
+          <input
+            id="complaintDate"
+            type="date"
+            value={complaintDate}
+            max={maxComplaintDate}
+            onChange={(e) => setComplaintDate(e.target.value)}
+          />
+        </div>
+
         <button className="addComplaintButton" onClick={addComplaint}>
           ＋ Add Another Complaint
         </button>
@@ -157,7 +170,6 @@ function AdminScreen({
   adminSearch, setAdminSearch, loadAdminComplaints, adminLoading, adminMessage,
   pending, completed, total, averageRepairDays,
   calculateDays, completedDates, handleCompletedDate, getToday, completeComplaint,
-  onOpenReport,
 }) {
   return (
     <>
@@ -201,11 +213,6 @@ function AdminScreen({
             </div>
           </div>
         </div>
-
-        {/* NEW: entry point into the full Admin Report */}
-        <button className="reportCtaButton" onClick={onOpenReport}>
-          📄 VIEW / DOWNLOAD REPORT
-        </button>
       </section>
 
       {/* SEARCH */}
@@ -330,183 +337,10 @@ function AdminScreen({
 }
 
 /* =====================================================
-   ADMIN REPORT SCREEN  (NEW — top-level component, never remounts)
-   Reads from the full adminComplaints list (not the dashboard's
-   already-filtered visibleComplaints) so the report always covers
-   every record, with its own independent filter box.
-===================================================== */
-function AdminReport({ allComplaints, calculateDays, getToday, onBack }) {
-  const [reportSearch, setReportSearch] = useState('');
-
-  const searchValue = reportSearch.trim().toLowerCase();
-  const rows = searchValue
-    ? allComplaints.filter((item) => {
-        const plate = item.vehicles?.plate_no?.toString().toLowerCase() || '';
-        const asset = item.vehicles?.asset_no?.toString().toLowerCase() || '';
-        return plate.includes(searchValue) || asset.includes(searchValue);
-      })
-    : allComplaints;
-
-  const reportPending = rows.filter((c) => c.status === 'Pending');
-  const reportCompleted = rows.filter((c) => c.status === 'Completed');
-  const reportTotal = rows.length;
-
-  const durations = reportCompleted.map((c) => calculateDays(c));
-  const reportAvgRepair =
-    durations.length > 0
-      ? Math.round(durations.reduce((sum, d) => sum + d, 0) / durations.length)
-      : 0;
-
-  function escapeCsv(value) {
-    const str = value === null || value === undefined ? '' : String(value);
-    if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-      return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
-  }
-
-  function handleExportCsv() {
-    const headers = [
-      'Employee', 'Plate No', 'Asset No', 'Complaint',
-      'Complaint Date', 'Status', 'Completed Date', 'Repair Duration (Days)',
-    ];
-
-    const csvRows = rows.map((c) => [
-      escapeCsv(c.employees?.name || '-'),
-      escapeCsv(c.vehicles?.plate_no || '-'),
-      escapeCsv(c.vehicles?.asset_no || '-'),
-      escapeCsv(c.complaint_text || '-'),
-      escapeCsv(c.complaint_date || '-'),
-      escapeCsv(c.status || '-'),
-      escapeCsv(c.completed_date || '-'),
-      escapeCsv(calculateDays(c)),
-    ]);
-
-    const csvContent = [headers.join(','), ...csvRows.map((r) => r.join(','))].join('\n');
-    // BOM so Excel opens UTF-8 CSVs correctly
-    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `SpicDrive_Report_${getToday()}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  }
-
-  function handlePrint() {
-    window.print();
-  }
-
-  return (
-    <>
-      <div className="reportTopBar noPrint">
-        <button className="reportBackButton" onClick={onBack}>
-          ← Back to Admin
-        </button>
-      </div>
-
-      <div id="reportPrintArea">
-        <section className="card">
-          <div className="sectionTitle">
-            <span className="iconCircle iconBlue">📄</span>
-            <div>
-              <h2>Complaint Report</h2>
-              <p>Full workshop complaint history</p>
-            </div>
-          </div>
-
-          <div className="reportStatsGrid">
-            <div className="reportStatCard reportStatPending">
-              <span>Pending</span>
-              <strong>{reportPending.length}</strong>
-            </div>
-            <div className="reportStatCard reportStatCompleted">
-              <span>Completed</span>
-              <strong>{reportCompleted.length}</strong>
-            </div>
-            <div className="reportStatCard reportStatTotal">
-              <span>Total</span>
-              <strong>{reportTotal}</strong>
-            </div>
-            <div className="reportStatCard reportStatAvg">
-              <span>Avg. Repair</span>
-              <strong>{reportAvgRepair} Days</strong>
-            </div>
-          </div>
-
-          <div className="searchRow reportSearchRow noPrint">
-            <input
-              type="text"
-              value={reportSearch}
-              onChange={(e) => setReportSearch(e.target.value)}
-              placeholder="Filter by Plate No / Asset No"
-              autoComplete="off"
-            />
-          </div>
-
-          <div className="reportActionsRow noPrint">
-            <button className="exportCsvButton" onClick={handleExportCsv}>
-              ⬇ Export CSV
-            </button>
-            <button className="printReportButton" onClick={handlePrint}>
-              🖨 Print / Save PDF
-            </button>
-          </div>
-
-          <div className="reportTableWrapper">
-            {rows.length === 0 ? (
-              <div className="emptyState">No complaints match this filter</div>
-            ) : (
-              <table className="reportTable">
-                <thead>
-                  <tr>
-                    <th>Employee</th>
-                    <th>Plate No</th>
-                    <th>Asset No</th>
-                    <th>Complaint</th>
-                    <th>Complaint Date</th>
-                    <th>Status</th>
-                    <th>Completed Date</th>
-                    <th>Repair Days</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((c) => (
-                    <tr key={c.id}>
-                      <td>{c.employees?.name || '-'}</td>
-                      <td>{c.vehicles?.plate_no || '-'}</td>
-                      <td>{c.vehicles?.asset_no || '-'}</td>
-                      <td className="reportComplaintCell">{c.complaint_text}</td>
-                      <td>{c.complaint_date || '-'}</td>
-                      <td>
-                        <span className={c.status === 'Completed' ? 'badge completedBadge' : 'badge pendingBadge'}>
-                          {c.status === 'Completed' ? 'COMPLETED' : 'PENDING'}
-                        </span>
-                      </td>
-                      <td>{c.completed_date || '-'}</td>
-                      <td>{calculateDays(c)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </section>
-      </div>
-    </>
-  );
-}
-
-/* =====================================================
    MAIN APP
 ===================================================== */
 function App() {
   const [mode, setMode] = useState('driver');
-
-  // NEW: whether the Admin Report screen is open
-  const [showReport, setShowReport] = useState(false);
 
   // DRIVER STATE
   const [gsNo, setGsNo] = useState('');
@@ -520,6 +354,7 @@ function App() {
   const [vehicleLoading, setVehicleLoading] = useState(false);
 
   const [complaints, setComplaints] = useState(['']);
+  const [complaintDate, setComplaintDate] = useState(() => getTodayString());
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
 
@@ -529,6 +364,14 @@ function App() {
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminMessage, setAdminMessage] = useState('');
   const [completedDates, setCompletedDates] = useState({});
+
+  // Local date helper (avoids UTC-shift bugs from toISOString()).
+  function getTodayString() {
+    const d = new Date();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${d.getFullYear()}-${month}-${day}`;
+  }
 
   // -------- DRIVER FUNCTIONS --------
   async function findEmployee() {
@@ -620,6 +463,10 @@ function App() {
       setSaveMessage('Please search and select a vehicle first.');
       return;
     }
+    if (!complaintDate) {
+      setSaveMessage('Please select a complaint date.');
+      return;
+    }
 
     const validComplaints = complaints
       .map((text) => text.trim())
@@ -636,6 +483,7 @@ function App() {
       employee_id: employee.id,
       vehicle_id: vehicle.id,
       complaint_text: text,
+      complaint_date: complaintDate,
       status: 'Pending',
     }));
 
@@ -650,6 +498,7 @@ function App() {
 
     setSaveMessage(`✓ ${validComplaints.length} complaint(s) submitted successfully.`);
     setComplaints(['']);
+    setComplaintDate(getTodayString());
   }
 
   // -------- ADMIN FUNCTIONS --------
@@ -734,15 +583,8 @@ function App() {
     return Math.max(0, Math.floor(diff / (1000 * 60 * 60 * 24)));
   }
 
-  function getToday() {
-    const d = new Date();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${d.getFullYear()}-${month}-${day}`;
-  }
-
   async function completeComplaint(id) {
-    const date = completedDates[id] || getToday();
+    const date = completedDates[id] || getTodayString();
 
     const { error } = await supabase
       .from('complaint_records')
@@ -779,24 +621,21 @@ function App() {
       ? Math.round(completedDurations.reduce((sum, d) => sum + d, 0) / completedDurations.length)
       : 0;
 
-  // If the user switches out of Admin mode, close the report view too.
-  useEffect(() => {
-    if (mode !== 'admin' && showReport) {
-      setShowReport(false);
-    }
-  }, [mode, showReport]);
-
   return (
     <div className="app">
-      <header className="header noPrint">
-        <div>
-          <div className="logo">SPIC DRIVE</div>
-          <div className="headerSub">Vehicle Service System</div>
+      <header className="header">
+        <div className="brandRow">
+          <div className="logoBadge">
+            <img src={spicDriveLogo} alt="SPIC DRIVE logo" className="logoImg" />
+          </div>
+          <div>
+            <div className="logo">SPIC DRIVE</div>
+            <div className="headerSub">Vehicle Service System</div>
+          </div>
         </div>
-        <div className="headerIcon">🚗</div>
       </header>
 
-      <div className="modeSwitch noPrint">
+      <div className="modeSwitch">
         <button
           className={mode === 'driver' ? 'modeButton activeMode' : 'modeButton'}
           onClick={() => setMode('driver')}
@@ -818,16 +657,10 @@ function App() {
             employeeMessage={employeeMessage} employeeLoading={employeeLoading} findEmployee={findEmployee}
             vehicleNo={vehicleNo} setVehicleNo={setVehicleNo} vehicle={vehicle}
             vehicleMessage={vehicleMessage} vehicleLoading={vehicleLoading} findVehicle={findVehicle}
+            complaintDate={complaintDate} setComplaintDate={setComplaintDate} maxComplaintDate={getTodayString()}
             complaints={complaints} updateComplaint={updateComplaint}
             addComplaint={addComplaint} removeComplaint={removeComplaint}
             submitComplaints={submitComplaints} saving={saving} saveMessage={saveMessage}
-          />
-        ) : showReport ? (
-          <AdminReport
-            allComplaints={adminComplaints}
-            calculateDays={calculateDays}
-            getToday={getToday}
-            onBack={() => setShowReport(false)}
           />
         ) : (
           <AdminScreen
@@ -835,13 +668,12 @@ function App() {
             loadAdminComplaints={loadAdminComplaints} adminLoading={adminLoading} adminMessage={adminMessage}
             pending={pending} completed={completed} total={total} averageRepairDays={averageRepairDays}
             calculateDays={calculateDays} completedDates={completedDates}
-            handleCompletedDate={handleCompletedDate} getToday={getToday} completeComplaint={completeComplaint}
-            onOpenReport={() => setShowReport(true)}
+            handleCompletedDate={handleCompletedDate} getToday={getTodayString} completeComplaint={completeComplaint}
           />
         )}
       </main>
 
-      <footer className="noPrint">SPIC DRIVE • Vehicle Management System</footer>
+      <footer>SPIC DRIVE • Vehicle Management System</footer>
     </div>
   );
 }
