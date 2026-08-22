@@ -30,20 +30,17 @@
 
   --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
   --shadow-md: 0 4px 16px rgba(15, 23, 42, 0.06);
-  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.1);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.10);
   --shadow-glow: 0 8px 24px rgba(79, 70, 229, 0.25);
 
   --radius-lg: 20px;
   --radius-md: 14px;
   --radius-sm: 10px;
 
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
-    sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
 }
 
-* {
-  box-sizing: border-box;
-}
+* { box-sizing: border-box; }
 
 body {
   margin: 0;
@@ -63,12 +60,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 28px 22px 24px;
-  background: linear-gradient(
-    135deg,
-    var(--indigo-600) 0%,
-    var(--violet-500) 100%
-  );
+  padding: 20px 22px;
+  background: linear-gradient(135deg, var(--indigo-600) 0%, var(--violet-500) 100%);
   color: var(--white);
   border-radius: 0 0 28px 28px;
   box-shadow: var(--shadow-glow);
@@ -87,14 +80,49 @@ body {
   border-radius: 50%;
 }
 
+/* Row that holds the logo badge + wordmark, sits above the ::after glow circle */
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  position: relative;
+  z-index: 1;
+}
+
+/* Fixed-size, self-contained badge so the logo can never blow up the header.
+   The badge itself is a small rounded square; the image is constrained to
+   fit inside it via object-fit, regardless of the source image's own
+   dimensions or aspect ratio. */
+.logoBadge {
+  width: 48px;
+  height: 48px;
+  min-width: 48px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.14);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.logoImg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
 .logo {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 800;
   letter-spacing: 0.5px;
+  line-height: 1.2;
 }
 
 .headerSub {
-  font-size: 13px;
+  font-size: 12.5px;
   opacity: 0.85;
   margin-top: 2px;
   font-weight: 500;
@@ -167,9 +195,7 @@ body {
   transition: box-shadow 0.25s ease;
 }
 
-.card:hover {
-  box-shadow: var(--shadow-lg);
-}
+.card:hover { box-shadow: var(--shadow-lg); }
 
 .sectionTitle {
   display: flex;
@@ -202,15 +228,9 @@ body {
   font-size: 19px;
 }
 
-.iconBlue {
-  background: #e0e7ff;
-}
-.iconViolet {
-  background: #ede9fe;
-}
-.iconAmber {
-  background: #fef3c7;
-}
+.iconBlue { background: #e0e7ff; }
+.iconViolet { background: #ede9fe; }
+.iconAmber { background: #fef3c7; }
 
 /* ---------------- INPUTS ---------------- */
 .searchRow {
@@ -218,8 +238,15 @@ body {
   gap: 10px;
 }
 
-input,
-textarea {
+.fieldLabel {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--slate-500);
+  margin: 0 0 6px 2px;
+}
+
+input, textarea {
   width: 100%;
   border: 1.5px solid var(--slate-300);
   border-radius: var(--radius-sm);
@@ -232,15 +259,16 @@ textarea {
   outline: none;
 }
 
-input:focus,
-textarea:focus {
+input:focus, textarea:focus {
   border-color: var(--indigo-500);
   background: var(--white);
   box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
 }
 
-textarea {
-  resize: vertical;
+textarea { resize: vertical; }
+
+.dateField {
+  margin-bottom: 14px;
 }
 
 /* ---------------- BUTTONS ---------------- */
@@ -258,13 +286,8 @@ textarea {
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.btnPrimary:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.32);
-}
-.btnPrimary:active {
-  transform: translateY(0);
-}
+.btnPrimary:hover { transform: translateY(-1px); box-shadow: 0 6px 16px rgba(79, 70, 229, 0.32); }
+.btnPrimary:active { transform: translateY(0); }
 
 .spinner {
   display: inline-block;
@@ -276,16 +299,9 @@ textarea {
   animation: spin 0.7s linear infinite;
 }
 
-.spinner.light {
-  border-color: rgba(255, 255, 255, 0.5);
-  border-top-color: var(--white);
-}
+.spinner.light { border-color: rgba(255, 255, 255, 0.5); border-top-color: var(--white); }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+@keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------------- MESSAGES ---------------- */
 .errorMessage {
@@ -311,12 +327,7 @@ textarea {
   border: 1px solid var(--emerald-100);
 }
 
-.loadingText {
-  color: var(--slate-500);
-  font-size: 13.5px;
-  text-align: center;
-  margin: 6px 0;
-}
+.loadingText { color: var(--slate-500); font-size: 13.5px; text-align: center; margin: 6px 0; }
 
 /* ---------------- SUCCESS / INFO BOX ---------------- */
 .successBox {
@@ -355,21 +366,10 @@ textarea {
   margin-bottom: 12px;
 }
 
-.vehicleMain strong {
-  font-size: 18px;
-  color: var(--slate-900);
-}
-.vehicleMain span {
-  font-size: 12.5px;
-  color: var(--slate-500);
-  margin-top: 2px;
-}
+.vehicleMain strong { font-size: 18px; color: var(--slate-900); }
+.vehicleMain span { font-size: 12.5px; color: var(--slate-500); margin-top: 2px; }
 
-.infoGrid {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
+.infoGrid { display: flex; flex-direction: column; gap: 8px; }
 
 .infoRow {
   display: flex;
@@ -379,16 +379,9 @@ textarea {
   border-bottom: 1px dashed rgba(15, 23, 42, 0.08);
 }
 
-.infoRow:last-child {
-  border-bottom: none;
-}
-.infoRow span {
-  color: var(--slate-500);
-}
-.infoRow strong {
-  color: var(--slate-900);
-  font-weight: 600;
-}
+.infoRow:last-child { border-bottom: none; }
+.infoRow span { color: var(--slate-500); }
+.infoRow strong { color: var(--slate-900); font-weight: 600; }
 
 /* ---------------- COMPLAINTS ---------------- */
 .complaintItem {
@@ -428,9 +421,7 @@ textarea {
   transition: background 0.2s ease;
 }
 
-.deleteComplaint:hover {
-  background: var(--red-100);
-}
+.deleteComplaint:hover { background: var(--red-100); }
 
 .addComplaintButton {
   width: 100%;
@@ -446,9 +437,7 @@ textarea {
   transition: background 0.2s ease;
 }
 
-.addComplaintButton:hover {
-  background: #e0e7ff;
-}
+.addComplaintButton:hover { background: #e0e7ff; }
 
 .submitButton {
   width: 100%;
@@ -465,22 +454,12 @@ textarea {
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-.submitButton:hover {
-  transform: translateY(-1px);
-}
-.submitButton:disabled {
-  opacity: 0.65;
-  cursor: not-allowed;
-  transform: none;
-}
+.submitButton:hover { transform: translateY(-1px); }
+.submitButton:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
 
 /* ---------------- ADMIN DASHBOARD ---------------- */
 .adminDashboard {
-  background: linear-gradient(
-    135deg,
-    var(--indigo-600) 0%,
-    var(--violet-500) 100%
-  );
+  background: linear-gradient(135deg, var(--indigo-600) 0%, var(--violet-500) 100%);
   border-radius: var(--radius-lg);
   padding: 22px;
   color: var(--white);
@@ -494,16 +473,8 @@ textarea {
   margin-bottom: 18px;
 }
 
-.dashboardHeader h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 800;
-}
-.dashboardHeader p {
-  margin: 2px 0 0;
-  font-size: 12.5px;
-  opacity: 0.85;
-}
+.dashboardHeader h2 { margin: 0; font-size: 18px; font-weight: 800; }
+.dashboardHeader p { margin: 2px 0 0; font-size: 12.5px; opacity: 0.85; }
 
 .dashboardIcon {
   width: 44px;
@@ -532,21 +503,10 @@ textarea {
   backdrop-filter: blur(6px);
 }
 
-.dashboardCardIcon {
-  font-size: 18px;
-}
+.dashboardCardIcon { font-size: 18px; }
 
-.dashboardCard span {
-  display: block;
-  font-size: 11.5px;
-  opacity: 0.85;
-}
-.dashboardCard strong {
-  display: block;
-  font-size: 19px;
-  font-weight: 800;
-  margin-top: 2px;
-}
+.dashboardCard span { display: block; font-size: 11.5px; opacity: 0.85; }
+.dashboardCard strong { display: block; font-size: 19px; font-weight: 800; margin-top: 2px; }
 
 /* ---------------- ADMIN SECTION TITLE ---------------- */
 .adminSectionTitle {
@@ -566,14 +526,8 @@ textarea {
   border-radius: 20px;
 }
 
-.pendingCount {
-  background: var(--red-50);
-  color: var(--red-600);
-}
-.completedCount {
-  background: var(--emerald-50);
-  color: var(--emerald-600);
-}
+.pendingCount { background: var(--red-50); color: var(--red-600); }
+.completedCount { background: var(--emerald-50); color: var(--emerald-600); }
 
 .emptyState {
   text-align: center;
@@ -592,17 +546,10 @@ textarea {
   transition: box-shadow 0.2s ease;
 }
 
-.adminComplaint:hover {
-  box-shadow: var(--shadow-sm);
-}
-.adminComplaint:last-child {
-  margin-bottom: 0;
-}
+.adminComplaint:hover { box-shadow: var(--shadow-sm); }
+.adminComplaint:last-child { margin-bottom: 0; }
 
-.adminComplaint.completedCard {
-  background: var(--emerald-50);
-  border-color: var(--emerald-100);
-}
+.adminComplaint.completedCard { background: var(--emerald-50); border-color: var(--emerald-100); }
 
 .adminComplaintTop {
   display: flex;
@@ -612,11 +559,7 @@ textarea {
   margin-bottom: 12px;
 }
 
-.adminComplaintTop strong {
-  font-size: 14.5px;
-  color: var(--slate-900);
-  line-height: 1.4;
-}
+.adminComplaintTop strong { font-size: 14.5px; color: var(--slate-900); line-height: 1.4; }
 
 .badge {
   font-size: 10.5px;
@@ -627,14 +570,8 @@ textarea {
   white-space: nowrap;
 }
 
-.pendingBadge {
-  background: var(--amber-50);
-  color: var(--amber-600);
-}
-.completedBadge {
-  background: var(--emerald-100);
-  color: var(--emerald-600);
-}
+.pendingBadge { background: var(--amber-50); color: var(--amber-600); }
+.completedBadge { background: var(--emerald-100); color: var(--emerald-600); }
 
 .adminInfoGrid {
   display: grid;
@@ -643,20 +580,9 @@ textarea {
   margin-bottom: 12px;
 }
 
-.adminInfo {
-  display: flex;
-  flex-direction: column;
-  font-size: 12.5px;
-}
-.adminInfo span {
-  color: var(--slate-500);
-  margin-bottom: 2px;
-}
-.adminInfo strong {
-  color: var(--slate-900);
-  font-weight: 600;
-  font-size: 13.5px;
-}
+.adminInfo { display: flex; flex-direction: column; font-size: 12.5px; }
+.adminInfo span { color: var(--slate-500); margin-bottom: 2px; }
+.adminInfo strong { color: var(--slate-900); font-weight: 600; font-size: 13.5px; }
 
 .daysBox {
   background: var(--amber-50);
@@ -668,10 +594,7 @@ textarea {
   margin-bottom: 4px;
 }
 
-.daysBox.completedDays {
-  background: var(--emerald-100);
-  color: var(--emerald-600);
-}
+.daysBox.completedDays { background: var(--emerald-100); color: var(--emerald-600); }
 
 .completeRow {
   display: flex;
@@ -679,9 +602,7 @@ textarea {
   margin-top: 10px;
 }
 
-.completeRow input {
-  flex: 1;
-}
+.completeRow input { flex: 1; }
 
 .completeButton {
   border: none;
@@ -697,9 +618,7 @@ textarea {
   transition: transform 0.15s ease;
 }
 
-.completeButton:hover {
-  transform: translateY(-1px);
-}
+.completeButton:hover { transform: translateY(-1px); }
 
 /* ---------------- FOOTER ---------------- */
 footer {
@@ -711,26 +630,17 @@ footer {
 }
 
 /* ---------------- MICRO-INTERACTIONS ---------------- */
-.fadeIn {
-  animation: fadeInUp 0.3s ease;
-}
+.fadeIn { animation: fadeInUp 0.3s ease; }
 
 @keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* =====================================================
-   NEW: ADMIN REPORT FEATURE
+   ADMIN REPORT FEATURE
 ===================================================== */
 
-/* Entry-point CTA button on the gradient dashboard card */
 .reportCtaButton {
   width: 100%;
   margin-top: 14px;
@@ -747,12 +657,8 @@ footer {
   transition: background 0.2s ease, transform 0.15s ease;
 }
 
-.reportCtaButton:hover {
-  background: rgba(255, 255, 255, 0.26);
-  transform: translateY(-1px);
-}
+.reportCtaButton:hover { background: rgba(255, 255, 255, 0.26); transform: translateY(-1px); }
 
-/* Top bar with the back button on the report screen */
 .reportTopBar {
   display: flex;
   align-items: center;
@@ -771,12 +677,8 @@ footer {
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.reportBackButton:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--shadow-lg);
-}
+.reportBackButton:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
 
-/* Stats grid inside the report card */
 .reportStatsGrid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -791,36 +693,15 @@ footer {
   padding: 14px;
 }
 
-.reportStatCard span {
-  display: block;
-  font-size: 11.5px;
-  color: var(--slate-500);
-}
-.reportStatCard strong {
-  display: block;
-  font-size: 19px;
-  font-weight: 800;
-  margin-top: 2px;
-  color: var(--slate-900);
-}
+.reportStatCard span { display: block; font-size: 11.5px; color: var(--slate-500); }
+.reportStatCard strong { display: block; font-size: 19px; font-weight: 800; margin-top: 2px; color: var(--slate-900); }
 
-.reportStatPending strong {
-  color: var(--red-600);
-}
-.reportStatCompleted strong {
-  color: var(--emerald-600);
-}
-.reportStatTotal strong {
-  color: var(--indigo-600);
-}
-.reportStatAvg strong {
-  color: var(--amber-600);
-}
+.reportStatPending strong { color: var(--red-600); }
+.reportStatCompleted strong { color: var(--emerald-600); }
+.reportStatTotal strong { color: var(--indigo-600); }
+.reportStatAvg strong { color: var(--amber-600); }
 
-/* Filter row + action buttons */
-.reportSearchRow {
-  margin-bottom: 14px;
-}
+.reportSearchRow { margin-bottom: 14px; }
 
 .reportActionsRow {
   display: flex;
@@ -842,9 +723,7 @@ footer {
   transition: transform 0.15s ease;
 }
 
-.exportCsvButton:hover {
-  transform: translateY(-1px);
-}
+.exportCsvButton:hover { transform: translateY(-1px); }
 
 .printReportButton {
   flex: 1;
@@ -860,11 +739,8 @@ footer {
   transition: transform 0.15s ease;
 }
 
-.printReportButton:hover {
-  transform: translateY(-1px);
-}
+.printReportButton:hover { transform: translateY(-1px); }
 
-/* Report table — horizontally scrollable so it stays mobile-friendly */
 .reportTableWrapper {
   overflow-x: auto;
   border: 1px solid var(--slate-100);
@@ -899,9 +775,7 @@ footer {
   white-space: nowrap;
 }
 
-.reportTable tbody tr:nth-child(even) {
-  background: var(--slate-50);
-}
+.reportTable tbody tr:nth-child(even) { background: var(--slate-50); }
 
 .reportComplaintCell {
   white-space: normal;
@@ -909,42 +783,19 @@ footer {
   max-width: 280px;
 }
 
-/* ---------------- PRINT / SAVE AS PDF ---------------- */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-  #reportPrintArea,
-  #reportPrintArea * {
-    visibility: visible;
-  }
+  body * { visibility: hidden; }
+  #reportPrintArea, #reportPrintArea * { visibility: visible; }
   #reportPrintArea {
     position: absolute;
     left: 0;
     top: 0;
     width: 100%;
   }
-  .app,
-  .container {
-    max-width: 100% !important;
-    padding: 0 !important;
-  }
-  .card {
-    box-shadow: none !important;
-    border: none !important;
-  }
-  .noPrint {
-    display: none !important;
-  }
-  .reportTableWrapper {
-    overflow: visible !important;
-    border: none !important;
-  }
-  .reportTable {
-    min-width: 0 !important;
-  }
-  .reportTable tbody td,
-  .reportTable thead th {
-    white-space: normal !important;
-  }
+  .app, .container { max-width: 100% !important; padding: 0 !important; }
+  .card { box-shadow: none !important; border: none !important; }
+  .noPrint { display: none !important; }
+  .reportTableWrapper { overflow: visible !important; border: none !important; }
+  .reportTable { min-width: 0 !important; }
+  .reportTable tbody td, .reportTable thead th { white-space: normal !important; }
 }
