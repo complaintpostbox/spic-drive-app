@@ -1,1 +1,21 @@
-
+{
+  "name": "SPIC DRIVE - Vehicle Service System",
+  "short_name": "SPIC DRIVE",
+  "description": "Vehicle complaint and workshop management system",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "/spicdrive-logo.jpg",
+      "sizes": "192x192",
+      "type": "image/jpeg"
+    },
+    {
+      "src": "/spicdrive-logo.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg"
+    }
+  ]
+}
