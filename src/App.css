@@ -284,10 +284,22 @@ footer { text-align: center; font-size: 11.5px; color: var(--slate-500); padding
 .reportTopBar { margin-bottom: 14px; }
 .reportBackButton { border: none; background: #fff; color: var(--indigo-600); font-weight: 700; font-size: 13.5px; padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-md); cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease; }
 .reportBackButton:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
-.reportStatsGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
-.reportStatCard { background: rgba(255, 255, 255, 0.07); border: 1px solid rgba(255, 255, 255, 0.09); border-radius: var(--radius-sm); padding: 14px; }
-.reportStatCard span { display: block; font-size: 11px; opacity: 0.75; }
-.reportStatCard strong { display: block; font-size: 18px; font-weight: 800; margin-top: 2px; }
+
+/* Letterhead: shown on screen AND kept in the print/export layout, since
+   this is what makes a printed report look "official". */
+.reportLetterhead {
+  display: flex; align-items: center; gap: 14px; background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
+  border-radius: var(--radius-lg); padding: 18px 20px; color: #fff; box-shadow: var(--shadow-glow); margin-bottom: 18px;
+}
+.reportLetterheadLogo { width: 46px; height: 46px; min-width: 46px; border-radius: 13px; object-fit: contain; background: rgba(255, 255, 255, 0.12); padding: 6px; }
+.reportLetterheadText { flex: 1; }
+.reportLetterheadText h2 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: 0.5px; }
+.reportLetterheadText p { margin: 2px 0 0; font-size: 12px; opacity: 0.8; }
+.reportLetterheadMeta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 11px; opacity: 0.85; text-align: right; white-space: nowrap; }
+
+.reportTableCaption { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.reportTableCaption span:first-child { font-weight: 700; font-size: 14px; color: var(--slate-900); }
+.reportTableCount { font-size: 12px; color: var(--slate-500); font-weight: 600; }
 .reportTableWrapper { overflow-x: auto; border: 1px solid var(--slate-100); border-radius: var(--radius-sm); -webkit-overflow-scrolling: touch; }
 .reportTable { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 720px; }
 .reportTable thead th { background: var(--slate-100); color: var(--slate-700); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.3px; text-align: left; padding: 10px 12px; white-space: nowrap; }
@@ -310,4 +322,6 @@ button:focus-visible, input:focus-visible, textarea:focus-visible {
   .reportTableWrapper { overflow: visible !important; border: none !important; }
   .reportTable { min-width: 0 !important; }
   .reportTable tbody td, .reportTable thead th { white-space: normal !important; }
+  .reportLetterhead { background: #fff !important; color: var(--slate-900) !important; box-shadow: none !important; border: 1.5px solid var(--slate-300) !important; }
+  .reportLetterheadText p, .reportLetterheadMeta { opacity: 1 !important; color: var(--slate-500) !important; }
 }
