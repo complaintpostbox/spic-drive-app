@@ -43,11 +43,29 @@ async function fetchLocationsData() {
 // Builds a Google Maps multi-stop directions URL. Distance and travel time
 // are computed by Google Maps itself once the link opens — no separate
 // Distance Matrix call needed.
+//
+// Each location's address/coordinate string is normalized and handed to
+// URLSearchParams, which percent-encodes it correctly on its own (commas in
+// "lat,lng" become %2C, spaces become +, etc.) — this avoids the broken
+// links that came from manually encoding pieces and gluing them together
+// with a raw "|" separator, which some browsers/webviews mangled.
+function formatMapPoint(location) {
+  const raw = ((location.address && location.address.trim()) || location.name || '').trim();
+  // Recognize "lat,lng" (with or without spaces around the comma) so
+  // coordinate pairs are passed through cleanly rather than as free text.
+  const coordMatch = raw.match(/^(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
+  return coordMatch ? `${coordMatch[1]},${coordMatch[2]}` : raw;
+}
+
 function buildGoogleMapsUrl(origin, destination, waypoints) {
-  const loc = (l) => encodeURIComponent((l.address && l.address.trim()) || l.name);
-  let url = `https://www.google.com/maps/dir/?api=1&origin=${loc(origin)}&destination=${loc(destination)}&travelmode=driving`;
-  if (waypoints.length) url += `&waypoints=${waypoints.map(loc).join('|')}`;
-  return url;
+  const params = new URLSearchParams();
+  params.set('api', '1');
+  params.set('origin', formatMapPoint(origin));
+  params.set('destination', formatMapPoint(destination));
+  params.set('travelmode', 'driving');
+  const stops = waypoints.map(formatMapPoint).filter(Boolean);
+  if (stops.length) params.set('waypoints', stops.join('|'));
+  return `https://www.google.com/maps/dir/?${params.toString()}`;
 }
 
 /* =====================================================
