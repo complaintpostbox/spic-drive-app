@@ -162,12 +162,13 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
 /* ---------------- INPUTS ---------------- */
 .searchRow { display: flex; gap: 10px; }
 .fieldLabel { display: block; font-size: 12px; font-weight: 600; color: var(--slate-500); margin: 0 0 6px 2px; }
-input, textarea {
+input, textarea, select {
   width: 100%; border: 1.5px solid var(--slate-300); border-radius: var(--radius-sm); padding: 12px 14px;
   font-size: 14px; font-family: inherit; color: var(--slate-900); background: var(--slate-50);
   outline: none; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
-input:focus, textarea:focus { border-color: var(--indigo-500); background: #fff; box-shadow: 0 0 0 4px rgba(79, 95, 245, 0.12); }
+input:focus, textarea:focus, select:focus { border-color: var(--indigo-500); background: #fff; box-shadow: 0 0 0 4px rgba(79, 95, 245, 0.12); }
+select { cursor: pointer; }
 textarea { resize: vertical; }
 .dateField { margin-bottom: 14px; }
 
@@ -231,6 +232,12 @@ textarea { resize: vertical; }
 .dashboardCard strong { display: block; font-size: 18px; font-weight: 800; margin-top: 2px; }
 .reportCtaButton { width: 100%; border: 1.5px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.08); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; transition: background 0.2s ease, transform 0.15s ease; }
 .reportCtaButton:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-1px); }
+.dashboardCtaRow { display: flex; gap: 10px; }
+
+/* Driver's 3-tab switch (Submit / Status / Route) reuses .modeSwitch but
+   needs slightly tighter button padding to fit three labels comfortably. */
+.driverTabs .modeButton { padding: 11px 4px; font-size: 12.5px; }
+.locationCancelBtn { width: auto; height: auto; padding: 0 14px; border-radius: var(--radius-sm); font-weight: 600; font-size: 12.5px; }
 
 /* ---------------- ADMIN SECTION ---------------- */
 .adminSectionTitle { display: flex; align-items: center; justify-content: space-between; font-weight: 700; font-size: 14.5px; margin-bottom: 14px; color: var(--slate-900); }
