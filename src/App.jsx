@@ -91,6 +91,8 @@ function LoginScreen({ onLogin }) {
    DRIVER SCREEN
 ===================================================== */
 function DriverScreen({ currentUser }) {
+  const [tab, setTab] = useState('form'); // 'form' | 'status'
+
   const [gsNo, setGsNo] = useState(currentUser.role === 'driver' ? (currentUser.gs_no || '') : '');
   const [employee, setEmployee] = useState(null);
   const [employeeMessage, setEmployeeMessage] = useState('');
@@ -106,44 +108,55 @@ function DriverScreen({ currentUser }) {
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
 
-  const [myComplaints, setMyComplaints] = useState([]);
-  const [myComplaintsLoading, setMyComplaintsLoading] = useState(false);
-  const [myComplaintsMessage, setMyComplaintsMessage] = useState('');
+  // All complaints across every vehicle/driver — read-only, mirrors the
+  // Admin Report data but with none of the admin action controls.
+  const [allComplaints, setAllComplaints] = useState([]);
+  const [allLoading, setAllLoading] = useState(false);
+  const [allMessage, setAllMessage] = useState('');
+  const [allLoaded, setAllLoaded] = useState(false);
 
-  async function loadMyComplaints(employeeId) {
-    setMyComplaintsLoading(true);
-    setMyComplaintsMessage('');
+  async function loadAllComplaints() {
+    setAllLoading(true);
+    setAllMessage('');
 
     const { data: rows, error } = await supabase
       .from('complaint_records')
       .select('*')
-      .eq('employee_id', employeeId)
       .order('complaint_date', { ascending: false });
 
     if (error) {
-      setMyComplaintsLoading(false);
-      setMyComplaints([]);
-      setMyComplaintsMessage('Could not load your complaint history: ' + error.message);
+      setAllLoading(false);
+      setAllComplaints([]);
+      setAllMessage('Could not load complaints: ' + error.message);
       return;
     }
 
     const vehicleIds = [...new Set((rows || []).map((r) => r.vehicle_id).filter(Boolean))];
-    let vehiclesData = [];
+    const employeeIds = [...new Set((rows || []).map((r) => r.employee_id).filter(Boolean))];
+    let vehiclesData = [], employeesData = [];
+
     if (vehicleIds.length > 0) {
       const { data } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
       vehiclesData = data || [];
     }
+    if (employeeIds.length > 0) {
+      const { data } = await supabase.from('employees').select('*').in('id', employeeIds);
+      employeesData = data || [];
+    }
 
-    setMyComplaints((rows || []).map((r) => ({
+    setAllComplaints((rows || []).map((r) => ({
       ...r,
       vehicles: vehiclesData.find((v) => v.id === r.vehicle_id) || null,
+      employees: employeesData.find((e) => e.id === r.employee_id) || null,
     })));
-    setMyComplaintsLoading(false);
+    setAllLoading(false);
+    setAllLoaded(true);
   }
 
-  const myTotal = myComplaints.length;
-  const myPending = myComplaints.filter((c) => c.status === 'Pending').length;
-  const myCompleted = myComplaints.filter((c) => c.status === 'Completed').length;
+  function openStatusTab() {
+    setTab('status');
+    if (!allLoaded) loadAllComplaints();
+  }
 
   useEffect(() => {
     if (currentUser.role === 'driver' && currentUser.gs_no) findEmployee();
@@ -158,7 +171,6 @@ function DriverScreen({ currentUser }) {
     if (error) { setEmployee(null); setEmployeeMessage(error.message); return; }
     if (!data) { setEmployee(null); setEmployeeMessage('Employee not found'); return; }
     setEmployee(data);
-    loadMyComplaints(data.id);
   }
 
   async function findVehicle() {
@@ -197,11 +209,30 @@ function DriverScreen({ currentUser }) {
     setSaveMessage(`✓ ${valid.length} complaint(s) submitted successfully.`);
     setComplaints(['']);
     setComplaintDate(getTodayString());
-    loadMyComplaints(employee.id);
+    setAllLoaded(false); // next visit to the status tab picks up the new record
+  }
+
+  if (tab === 'status') {
+    return (
+      <>
+        <div className="driverTabSwitch">
+          <button className="modeButton" onClick={() => setTab('form')}>📝 Submit Complaint</button>
+          <button className="modeButton activeMode" onClick={openStatusTab}>📋 Complaint Status</button>
+        </div>
+        {allLoading && <p className="loadingText">Loading complaints...</p>}
+        {allMessage && <div className="errorMessage">⚠ {allMessage}</div>}
+        {!allLoading && <AdminReport complaints={allComplaints} onBack={() => setTab('form')} backLabel="← Back to Complaint Form" />}
+      </>
+    );
   }
 
   return (
     <>
+      <div className="driverTabSwitch">
+        <button className="modeButton activeMode" onClick={() => setTab('form')}>📝 Submit Complaint</button>
+        <button className="modeButton" onClick={openStatusTab}>📋 Complaint Status</button>
+      </div>
+
       <section className="card">
         <div className="sectionTitle">
           <span className="iconCircle iconIndigo">👤</span>
@@ -270,42 +301,6 @@ function DriverScreen({ currentUser }) {
         </button>
         {saveMessage && <div className="saveMessage fadeIn">{saveMessage}</div>}
       </section>
-
-      <section className="card">
-        <div className="sectionTitle">
-          <span className="iconCircle iconIndigo">📋</span>
-          <div><h2>My Complaints</h2><p>Track the status of everything you've submitted</p></div>
-        </div>
-
-        <div className="myStatsRow">
-          <div className="myStatChip"><span>Total</span><strong>{myTotal}</strong></div>
-          <div className="myStatChip myStatPending"><span>Pending</span><strong>{myPending}</strong></div>
-          <div className="myStatChip myStatCompleted"><span>Completed</span><strong>{myCompleted}</strong></div>
-        </div>
-
-        {myComplaintsLoading && <p className="loadingText">Loading your complaints...</p>}
-        {myComplaintsMessage && <div className="errorMessage">⚠ {myComplaintsMessage}</div>}
-        {!myComplaintsLoading && !employee && (
-          <div className="emptyState">Verify your GS No above to see your complaint history</div>
-        )}
-        {!myComplaintsLoading && employee && myTotal === 0 && (
-          <div className="emptyState">No complaints submitted yet</div>
-        )}
-
-        {myComplaints.map((c) => (
-          <div className={c.status === 'Pending' ? 'myComplaintItem' : 'myComplaintItem myCompletedItem'} key={c.id}>
-            <div className="myComplaintTop">
-              <strong>{c.complaint_text}</strong>
-              <span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span>
-            </div>
-            <div className="myComplaintMeta">
-              <span>{c.vehicles?.plate_no || '-'}</span>
-              <span>Reported {c.complaint_date}</span>
-              {c.status === 'Completed' && c.completed_date && <span>Completed {c.completed_date}</span>}
-            </div>
-          </div>
-        ))}
-      </section>
     </>
   );
 }
@@ -315,7 +310,7 @@ function DriverScreen({ currentUser }) {
 ===================================================== */
 const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
 
-function AdminReport({ complaints, onBack }) {
+function AdminReport({ complaints, onBack, backLabel }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
 
@@ -348,7 +343,7 @@ function AdminReport({ complaints, onBack }) {
   return (
     <div id="reportPrintArea">
       <div className="reportTopBar noPrint">
-        <button className="reportBackButton" onClick={onBack}>← Back to Dashboard</button>
+        <button className="reportBackButton" onClick={onBack}>{backLabel || '← Back to Dashboard'}</button>
       </div>
 
       <section className="reportLetterhead">
