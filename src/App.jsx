@@ -106,6 +106,50 @@ function DriverScreen({ currentUser }) {
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
 
+  const [myComplaints, setMyComplaints] = useState([]);
+  const [myComplaintsLoading, setMyComplaintsLoading] = useState(false);
+  const [myComplaintsMessage, setMyComplaintsMessage] = useState('');
+
+  async function loadMyComplaints(employeeId) {
+    setMyComplaintsLoading(true);
+    setMyComplaintsMessage('');
+
+    const { data: rows, error } = await supabase
+      .from('complaint_records')
+      .select('*')
+      .eq('employee_id', employeeId)
+      .order('complaint_date', { ascending: false });
+
+    if (error) {
+      setMyComplaintsLoading(false);
+      setMyComplaints([]);
+      setMyComplaintsMessage('Could not load your complaint history: ' + error.message);
+      return;
+    }
+
+    const vehicleIds = [...new Set((rows || []).map((r) => r.vehicle_id).filter(Boolean))];
+    let vehiclesData = [];
+    if (vehicleIds.length > 0) {
+      const { data } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
+      vehiclesData = data || [];
+    }
+
+    setMyComplaints((rows || []).map((r) => ({
+      ...r,
+      vehicles: vehiclesData.find((v) => v.id === r.vehicle_id) || null,
+    })));
+    setMyComplaintsLoading(false);
+  }
+
+  const myTotal = myComplaints.length;
+  const myPending = myComplaints.filter((c) => c.status === 'Pending').length;
+  const myCompleted = myComplaints.filter((c) => c.status === 'Completed').length;
+
+  useEffect(() => {
+    if (currentUser.role === 'driver' && currentUser.gs_no) findEmployee();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function findEmployee() {
     if (!gsNo.trim()) { setEmployee(null); setEmployeeMessage('Please enter GS No'); return; }
     setEmployeeLoading(true); setEmployeeMessage('');
@@ -114,6 +158,7 @@ function DriverScreen({ currentUser }) {
     if (error) { setEmployee(null); setEmployeeMessage(error.message); return; }
     if (!data) { setEmployee(null); setEmployeeMessage('Employee not found'); return; }
     setEmployee(data);
+    loadMyComplaints(data.id);
   }
 
   async function findVehicle() {
@@ -152,6 +197,7 @@ function DriverScreen({ currentUser }) {
     setSaveMessage(`✓ ${valid.length} complaint(s) submitted successfully.`);
     setComplaints(['']);
     setComplaintDate(getTodayString());
+    loadMyComplaints(employee.id);
   }
 
   return (
@@ -223,6 +269,42 @@ function DriverScreen({ currentUser }) {
           {saving ? <span className="spinner light" /> : 'SUBMIT COMPLAINT'}
         </button>
         {saveMessage && <div className="saveMessage fadeIn">{saveMessage}</div>}
+      </section>
+
+      <section className="card">
+        <div className="sectionTitle">
+          <span className="iconCircle iconIndigo">📋</span>
+          <div><h2>My Complaints</h2><p>Track the status of everything you've submitted</p></div>
+        </div>
+
+        <div className="myStatsRow">
+          <div className="myStatChip"><span>Total</span><strong>{myTotal}</strong></div>
+          <div className="myStatChip myStatPending"><span>Pending</span><strong>{myPending}</strong></div>
+          <div className="myStatChip myStatCompleted"><span>Completed</span><strong>{myCompleted}</strong></div>
+        </div>
+
+        {myComplaintsLoading && <p className="loadingText">Loading your complaints...</p>}
+        {myComplaintsMessage && <div className="errorMessage">⚠ {myComplaintsMessage}</div>}
+        {!myComplaintsLoading && !employee && (
+          <div className="emptyState">Verify your GS No above to see your complaint history</div>
+        )}
+        {!myComplaintsLoading && employee && myTotal === 0 && (
+          <div className="emptyState">No complaints submitted yet</div>
+        )}
+
+        {myComplaints.map((c) => (
+          <div className={c.status === 'Pending' ? 'myComplaintItem' : 'myComplaintItem myCompletedItem'} key={c.id}>
+            <div className="myComplaintTop">
+              <strong>{c.complaint_text}</strong>
+              <span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span>
+            </div>
+            <div className="myComplaintMeta">
+              <span>{c.vehicles?.plate_no || '-'}</span>
+              <span>Reported {c.complaint_date}</span>
+              {c.status === 'Completed' && c.completed_date && <span>Completed {c.completed_date}</span>}
+            </div>
+          </div>
+        ))}
       </section>
     </>
   );
