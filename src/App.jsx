@@ -231,6 +231,8 @@ function DriverScreen({ currentUser }) {
 /* =====================================================
    ADMIN REPORT (with filters + CSV export + print)
 ===================================================== */
+const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
+
 function AdminReport({ complaints, onBack }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
@@ -246,12 +248,6 @@ function AdminReport({ complaints, onBack }) {
     return r;
   }, [complaints, filter, q]);
 
-  const pendingCount = complaints.filter((c) => c.status === 'Pending').length;
-  const completedList = complaints.filter((c) => c.status === 'Completed');
-  const avg = completedList.length
-    ? Math.round(completedList.reduce((s, c) => s + daysBetween(c.complaint_date, c.completed_date), 0) / completedList.length)
-    : 0;
-
   function exportCsv() {
     const header = ['S.No', 'Vehicle', 'Asset No', 'Driver', 'Complaint', 'Complaint Date', 'Completed Date', 'Status', 'Days'];
     const lines = rows.map((c, i) => [
@@ -263,7 +259,7 @@ function AdminReport({ complaints, onBack }) {
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `spic-drive-report-${getTodayString()}.csv`; a.click();
+    a.href = url; a.download = `spic-drive-${filter}-report-${getTodayString()}.csv`; a.click();
     URL.revokeObjectURL(url);
   }
 
@@ -273,16 +269,15 @@ function AdminReport({ complaints, onBack }) {
         <button className="reportBackButton" onClick={onBack}>← Back to Dashboard</button>
       </div>
 
-      <section className="adminDashboard">
-        <div className="dashboardHeader">
-          <div><h2>Workshop Report</h2><p>Full complaint register</p></div>
-          <div className="dashboardIcon">📊</div>
+      <section className="reportLetterhead">
+        <img src={spicDriveLogo} alt="SPIC DRIVE" className="reportLetterheadLogo" />
+        <div className="reportLetterheadText">
+          <h2>SPIC DRIVE</h2>
+          <p>Workshop Complaint Report</p>
         </div>
-        <div className="reportStatsGrid">
-          <div className="reportStatCard reportStatPending"><span>Pending</span><strong>{pendingCount}</strong></div>
-          <div className="reportStatCard reportStatCompleted"><span>Completed</span><strong>{completedList.length}</strong></div>
-          <div className="reportStatCard reportStatTotal"><span>Total</span><strong>{complaints.length}</strong></div>
-          <div className="reportStatCard reportStatAvg"><span>Avg. Repair</span><strong>{avg}d</strong></div>
+        <div className="reportLetterheadMeta">
+          <span>{FILTER_LABELS[filter]}</span>
+          <span>Generated {getTodayString()}</span>
         </div>
       </section>
 
@@ -302,6 +297,10 @@ function AdminReport({ complaints, onBack }) {
       </section>
 
       <section className="card">
+        <div className="reportTableCaption">
+          <span>{FILTER_LABELS[filter]}</span>
+          <span className="reportTableCount">{rows.length} record{rows.length === 1 ? '' : 's'}</span>
+        </div>
         <div className="reportTableWrapper">
           <table className="reportTable">
             <thead>
