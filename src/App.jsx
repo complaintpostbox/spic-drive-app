@@ -44,28 +44,33 @@ async function fetchLocationsData() {
 // are computed by Google Maps itself once the link opens — no separate
 // Distance Matrix call needed.
 //
-// Each location's address/coordinate string is normalized and handed to
-// URLSearchParams, which percent-encodes it correctly on its own (commas in
-// "lat,lng" become %2C, spaces become +, etc.) — this avoids the broken
-// links that came from manually encoding pieces and gluing them together
-// with a raw "|" separator, which some browsers/webviews mangled.
+// formatMapPoint recognizes "lat,lng" (any spacing around the comma) and
+// passes coordinate pairs through cleanly; otherwise it treats the value as
+// a free-text place name/address (e.g. `KNPC - 54`, `MHC "F" Camp`),
+// collapsing stray whitespace so admin-entered names stay well-formed as
+// the list of stations grows.
 function formatMapPoint(location) {
-  const raw = ((location.address && location.address.trim()) || location.name || '').trim();
-  // Recognize "lat,lng" (with or without spaces around the comma) so
-  // coordinate pairs are passed through cleanly rather than as free text.
+  const source = (location.address && location.address.trim()) || (location.name && location.name.trim()) || '';
+  const raw = source.replace(/\s+/g, ' ').trim();
   const coordMatch = raw.match(/^(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
   return coordMatch ? `${coordMatch[1]},${coordMatch[2]}` : raw;
 }
 
+// Each point is percent-encoded on its own with encodeURIComponent (so
+// commas in coordinates, quotes/hyphens/ampersands in names, etc. are all
+// handled correctly) — but unlike URLSearchParams, the "|" that separates
+// waypoints is left as a literal character rather than re-encoded to
+// "%7C". Google Maps' web client tolerates either, but its mobile-app
+// deep-link handler expects a raw "|" and doesn't reliably split on
+// "%7C", which is what was silently breaking multi-stop links on phones.
 function buildGoogleMapsUrl(origin, destination, waypoints) {
-  const params = new URLSearchParams();
-  params.set('api', '1');
-  params.set('origin', formatMapPoint(origin));
-  params.set('destination', formatMapPoint(destination));
-  params.set('travelmode', 'driving');
-  const stops = waypoints.map(formatMapPoint).filter(Boolean);
-  if (stops.length) params.set('waypoints', stops.join('|'));
-  return `https://www.google.com/maps/dir/?${params.toString()}`;
+  const originStr = encodeURIComponent(formatMapPoint(origin));
+  const destinationStr = encodeURIComponent(formatMapPoint(destination));
+  const stops = waypoints.map(formatMapPoint).filter(Boolean).map(encodeURIComponent);
+
+  let url = `https://www.google.com/maps/dir/?api=1&origin=${originStr}&destination=${destinationStr}&travelmode=driving`;
+  if (stops.length) url += `&waypoints=${stops.join('|')}`;
+  return url;
 }
 
 /* =====================================================
@@ -440,6 +445,10 @@ function RoutePlanner() {
     const origin = locationsById.get(startId);
     const destination = locationsById.get(endId);
     if (!origin || !destination) return;
+    if (!formatMapPoint(origin) || !formatMapPoint(destination)) {
+      setMessage('The selected start or end location has no name or address saved — edit it in Manage Locations first.');
+      return;
+    }
     const waypoints = stopIds.map((id) => locationsById.get(id)).filter(Boolean);
     window.open(buildGoogleMapsUrl(origin, destination, waypoints), '_blank', 'noopener,noreferrer');
   }
