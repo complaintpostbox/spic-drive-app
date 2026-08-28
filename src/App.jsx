@@ -32,6 +32,24 @@ function toMap(rows) {
   return m;
 }
 
+// Locations are fetched independently of the complaints data (only when the
+// Route Planner or Manage Locations screens actually mount) so they never
+// add weight to the driver/admin complaint flows.
+async function fetchLocationsData() {
+  const { data, error } = await supabase.from('locations').select('*').order('name', { ascending: true });
+  return { data: data || [], error };
+}
+
+// Builds a Google Maps multi-stop directions URL. Distance and travel time
+// are computed by Google Maps itself once the link opens — no separate
+// Distance Matrix call needed.
+function buildGoogleMapsUrl(origin, destination, waypoints) {
+  const loc = (l) => encodeURIComponent((l.address && l.address.trim()) || l.name);
+  let url = `https://www.google.com/maps/dir/?api=1&origin=${loc(origin)}&destination=${loc(destination)}&travelmode=driving`;
+  if (waypoints.length) url += `&waypoints=${waypoints.map(loc).join('|')}`;
+  return url;
+}
+
 /* =====================================================
    LOGIN SCREEN
    Expects a `users` table in Supabase: id, username, password,
@@ -364,24 +382,253 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
 }
 
 /* =====================================================
+   ROUTE PLANNER (driver-only tab)
+   Start point -> N dynamic stops -> end point, then hands the
+   ordered waypoints straight to Google Maps, which computes the
+   route, total distance, and travel time itself. Locations are
+   fetched only when this tab mounts, so it never touches the
+   complaints data path or slows the other tabs.
+===================================================== */
+function RoutePlanner() {
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+
+  const [startId, setStartId] = useState('');
+  const [endId, setEndId] = useState('');
+  const [stopIds, setStopIds] = useState([]);
+
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const { data, error } = await fetchLocationsData();
+      if (!active) return;
+      if (error) { setMessage('Could not load locations: ' + error.message); setLoading(false); return; }
+      setLocations(data);
+      setLoading(false);
+    })();
+    return () => { active = false; };
+  }, []);
+
+  const locationsById = useMemo(() => toMap(locations), [locations]);
+
+  function addStop() { setStopIds((s) => [...s, '']); }
+  function updateStop(i, v) { setStopIds((s) => s.map((x, idx) => (idx === i ? v : x))); }
+  function removeStop(i) { setStopIds((s) => s.filter((_, idx) => idx !== i)); }
+
+  const canOpen = Boolean(startId && endId);
+
+  function openInGoogleMaps() {
+    const origin = locationsById.get(startId);
+    const destination = locationsById.get(endId);
+    if (!origin || !destination) return;
+    const waypoints = stopIds.map((id) => locationsById.get(id)).filter(Boolean);
+    window.open(buildGoogleMapsUrl(origin, destination, waypoints), '_blank', 'noopener,noreferrer');
+  }
+
+  return (
+    <section className="card">
+      <div className="sectionTitle">
+        <span className="iconCircle iconIndigo">🗺️</span>
+        <div><h2>Route Planner</h2><p>Build a multi-stop trip and open it in Google Maps</p></div>
+      </div>
+
+      {loading && <p className="loadingText">Loading locations...</p>}
+      {message && <div className="errorMessage">⚠ {message}</div>}
+
+      {!loading && locations.length === 0 && !message && (
+        <div className="emptyState">No saved locations yet — ask an admin to add some in Manage Locations.</div>
+      )}
+
+      {!loading && locations.length > 0 && (
+        <>
+          <div className="dateField">
+            <label className="fieldLabel">Starting Point</label>
+            <select value={startId} onChange={(e) => setStartId(e.target.value)}>
+              <option value="">Select starting location</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
+
+          {stopIds.map((id, i) => (
+            <div className="dateField" key={i}>
+              <label className="fieldLabel">Point {i + 1}</label>
+              <div className="searchRow">
+                <select value={id} onChange={(e) => updateStop(i, e.target.value)}>
+                  <option value="">Select stop</option>
+                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                </select>
+                <button className="deleteComplaint" onClick={() => removeStop(i)}>✕</button>
+              </div>
+            </div>
+          ))}
+
+          <button className="addComplaintButton" onClick={addStop}>＋ Add Point</button>
+          {stopIds.length > 8 && (
+            <div className="errorMessage">⚠ Google Maps supports up to 9 stops — consider splitting long routes.</div>
+          )}
+
+          <div className="dateField">
+            <label className="fieldLabel">End Point</label>
+            <select value={endId} onChange={(e) => setEndId(e.target.value)}>
+              <option value="">Select destination</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          </div>
+
+          <button className="submitButton" onClick={openInGoogleMaps} disabled={!canOpen}>
+            🗺 Open Route in Google Maps
+          </button>
+          <p className="loadingText">Distance &amp; travel time are calculated automatically by Google Maps once it opens.</p>
+        </>
+      )}
+    </section>
+  );
+}
+
+/* =====================================================
    DRIVER EXPERIENCE
-   Two lightweight tabs: Submit Complaint / Complaint Status.
-   Used for real drivers, and for an admin previewing driver mode.
+   Three lightweight tabs: Submit Complaint / Complaint Status /
+   Route Planner. Only the active tab's component is mounted, so
+   each one's data loads independently and on demand. Used for
+   real drivers, and for an admin previewing driver mode.
 ===================================================== */
 function DriverExperience({ currentUser, complaints, complaintsLoading, complaintsMessage, onRefresh }) {
   const [tab, setTab] = useState('submit');
 
   return (
     <>
-      <div className="modeSwitch">
-        <button className={tab === 'submit' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('submit')}>📝 Submit Complaint</button>
-        <button className={tab === 'report' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('report')}>📋 Complaint Status</button>
+      <div className="modeSwitch driverTabs">
+        <button className={tab === 'submit' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('submit')}>📝 Submit</button>
+        <button className={tab === 'report' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('report')}>📋 Status</button>
+        <button className={tab === 'route' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('route')}>🗺️ Route</button>
       </div>
-      {tab === 'submit' ? (
-        <SubmitComplaintPanel currentUser={currentUser} onSubmitted={onRefresh} />
-      ) : (
+      {tab === 'submit' && <SubmitComplaintPanel currentUser={currentUser} onSubmitted={onRefresh} />}
+      {tab === 'report' && (
         <ReportView complaints={complaints} loading={complaintsLoading} message={complaintsMessage} showBack={false} />
       )}
+      {tab === 'route' && <RoutePlanner />}
+    </>
+  );
+}
+
+/* =====================================================
+   MANAGE LOCATIONS (admin-only)
+   Simple CRUD over a `locations` table (name + address/lat,lng)
+   that feeds the driver Route Planner's dropdowns.
+===================================================== */
+function LocationManager({ onBack }) {
+  const [locations, setLocations] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+
+  const [name, setName] = useState('');
+  const [address, setAddress] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editAddress, setEditAddress] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setMessage('');
+    const { data, error } = await fetchLocationsData();
+    if (error) { setMessage('Load failed: ' + error.message); setLoading(false); return; }
+    setLocations(data);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function addLocation() {
+    if (!name.trim()) { setMessage('Enter a location name.'); return; }
+    setSaving(true);
+    const { error } = await supabase.from('locations').insert({ name: name.trim(), address: address.trim() || null });
+    setSaving(false);
+    if (error) { setMessage('Save failed: ' + error.message); return; }
+    setName(''); setAddress('');
+    load();
+  }
+
+  function startEdit(loc) { setEditingId(loc.id); setEditName(loc.name); setEditAddress(loc.address || ''); }
+  function cancelEdit() { setEditingId(null); }
+
+  async function saveEdit(id) {
+    if (!editName.trim()) { setMessage('Name cannot be empty.'); return; }
+    const { error } = await supabase.from('locations').update({ name: editName.trim(), address: editAddress.trim() || null }).eq('id', id);
+    if (error) { setMessage('Update failed: ' + error.message); return; }
+    setEditingId(null);
+    load();
+  }
+
+  async function deleteLocation(id) {
+    const { error } = await supabase.from('locations').delete().eq('id', id);
+    if (error) { setMessage('Delete failed: ' + error.message); return; }
+    load();
+  }
+
+  return (
+    <>
+      <div className="reportTopBar noPrint">
+        <button className="reportBackButton" onClick={onBack}>← Back to Dashboard</button>
+      </div>
+
+      <section className="card">
+        <div className="sectionTitle">
+          <span className="iconCircle iconGold">📍</span>
+          <div><h2>Manage Locations</h2><p>Stations &amp; project sites used by the Route Planner (40–50 typical)</p></div>
+        </div>
+
+        <div className="dateField">
+          <label className="fieldLabel">Location Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. F Camp, Station 140" />
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Address / Coordinates (optional)</label>
+          <input value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Full address, or lat,lng — used for Google Maps" />
+        </div>
+        <button className="submitButton" onClick={addLocation} disabled={saving}>
+          {saving ? <span className="spinner light" /> : '＋ Add Location'}
+        </button>
+        {message && <div className="errorMessage">⚠ {message}</div>}
+      </section>
+
+      <section className="card">
+        <div className="adminSectionTitle"><span>📍 Locations</span><span className="countBadge pendingCount">{locations.length}</span></div>
+        {loading && <p className="loadingText">Loading...</p>}
+        {!loading && locations.length === 0 && <div className="emptyState">No locations added yet</div>}
+        {locations.map((loc) => (
+          <div className="adminComplaint" key={loc.id}>
+            {editingId === loc.id ? (
+              <>
+                <div className="dateField">
+                  <label className="fieldLabel">Name</label>
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                </div>
+                <div className="dateField">
+                  <label className="fieldLabel">Address / Coordinates</label>
+                  <input value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="Address / lat,lng" />
+                </div>
+                <div className="completeRow">
+                  <button className="completeButton" onClick={() => saveEdit(loc.id)}>✓ Save</button>
+                  <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="adminComplaintTop"><strong>{loc.name}</strong></div>
+                <div className="adminInfoGrid">
+                  <div className="adminInfo"><span>Address / Coordinates</span><strong>{loc.address || '-'}</strong></div>
+                </div>
+                <div className="completeRow">
+                  <button className="btnPrimary" onClick={() => startEdit(loc)}>Edit</button>
+                  <button className="deleteComplaint locationCancelBtn" onClick={() => deleteLocation(loc.id)}>Delete</button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </section>
     </>
   );
 }
@@ -391,7 +638,7 @@ function DriverExperience({ currentUser, complaints, complaintsLoading, complain
 ===================================================== */
 function AdminDashboard({
   complaints, adminSearch, setAdminSearch, refreshing, message,
-  completedDates, handleCompletedDate, completeComplaint, onOpenReport, onRefresh,
+  completedDates, handleCompletedDate, completeComplaint, onOpenReport, onOpenLocations, onRefresh,
 }) {
   const searchValue = adminSearch.trim().toLowerCase();
 
@@ -426,7 +673,10 @@ function AdminDashboard({
           <div className="dashboardCard"><span className="dot dotGold" /><div><span>Total</span><strong>{total}</strong></div></div>
           <div className="dashboardCard"><span className="dot dotIndigo" /><div><span>Avg. Repair</span><strong>{averageRepairDays}d</strong></div></div>
         </div>
-        <button className="reportCtaButton" onClick={onOpenReport}>📋 Open Full Report</button>
+        <div className="dashboardCtaRow">
+          <button className="reportCtaButton" onClick={onOpenReport}>📋 Open Full Report</button>
+          <button className="reportCtaButton" onClick={onOpenLocations}>📍 Manage Locations</button>
+        </div>
       </section>
 
       <section className="card">
@@ -493,7 +743,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [adminSearch, setAdminSearch] = useState('');
   const [completedDates, setCompletedDates] = useState({});
-  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report'
+  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report' | 'locations'
 
   // Single shared fetch — used by drivers (report tab), admins (dashboard +
   // report). Employees/vehicles are pulled once per fetch via id lookup maps
@@ -591,6 +841,8 @@ function App() {
           />
         ) : adminView === 'report' ? (
           <ReportView complaints={complaints} loading={complaintsLoading} message={message} showBack onBack={() => setAdminView('dashboard')} />
+        ) : adminView === 'locations' ? (
+          <LocationManager onBack={() => setAdminView('dashboard')} />
         ) : (
           <AdminDashboard
             complaints={complaints}
@@ -602,6 +854,7 @@ function App() {
             handleCompletedDate={handleCompletedDate}
             completeComplaint={completeComplaint}
             onOpenReport={() => setAdminView('report')}
+            onOpenLocations={() => setAdminView('locations')}
             onRefresh={fetchComplaints}
           />
         )}
@@ -626,9 +879,15 @@ export default App;
       writes to `complaint_records` to authenticated users.
    2. `users` table (username, password, role, name, gs_no) is a
       stepping stone to #1.
-   3. PERF: complaints/vehicles/employees are fetched once per
+   3. NEW: add a `locations` table (id, name, address) in Supabase
+      for Manage Locations / Route Planner to work — address can be
+      a normal address string or "lat,lng"; it's passed straight to
+      Google Maps as an origin/destination/waypoint.
+   4. PERF: complaints/vehicles/employees are fetched once per
       login (or on explicit refresh/submit/complete) and shared
       across the driver, report, and dashboard views via props —
       no per-screen duplicate queries, and id lookups use Map
-      instead of repeated Array#find.
+      instead of repeated Array#find. Locations load separately
+      and only when the Route Planner / Manage Locations screen
+      actually mounts, so they never touch the complaints path.
 ===================================================== */
