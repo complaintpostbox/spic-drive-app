@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabaseClient';
 import spicDriveLogo from './assets/spicdrive-logo.jpg';
 import './App.css';
@@ -15,6 +15,21 @@ function daysBetween(start, end) {
   const sd = new Date(s.getFullYear(), s.getMonth(), s.getDate());
   const ed = new Date(e.getFullYear(), e.getMonth(), e.getDate());
   return Math.max(0, Math.floor((ed - sd) / 86400000));
+}
+// Display helper only — storage / <input type="date"> stays ISO (YYYY-MM-DD).
+function formatDMY(dateStr) {
+  if (!dateStr) return null;
+  const parts = dateStr.split('-');
+  if (parts.length !== 3) return dateStr;
+  const [y, m, d] = parts;
+  return `${d}-${m}-${y}`;
+}
+// Build fast id -> record lookups once per fetch instead of repeated
+// Array#find calls (O(n) each) scattered through render.
+function toMap(rows) {
+  const m = new Map();
+  (rows || []).forEach((r) => m.set(r.id, r));
+  return m;
 }
 
 /* =====================================================
@@ -88,11 +103,13 @@ function LoginScreen({ onLogin }) {
 }
 
 /* =====================================================
-   DRIVER SCREEN
+   SUBMIT COMPLAINT PANEL
+   GS No lookup -> vehicle lookup -> multi-complaint submit.
+   Used both for real drivers and for an admin previewing the
+   driver flow. No "My Complaints" list here anymore — that's
+   what the Report tab is for (avoids a duplicate query).
 ===================================================== */
-function DriverScreen({ currentUser }) {
-  const [tab, setTab] = useState('form'); // 'form' | 'status'
-
+function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   const [gsNo, setGsNo] = useState(currentUser.role === 'driver' ? (currentUser.gs_no || '') : '');
   const [employee, setEmployee] = useState(null);
   const [employeeMessage, setEmployeeMessage] = useState('');
@@ -108,62 +125,7 @@ function DriverScreen({ currentUser }) {
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
 
-  // All complaints across every vehicle/driver — read-only, mirrors the
-  // Admin Report data but with none of the admin action controls.
-  const [allComplaints, setAllComplaints] = useState([]);
-  const [allLoading, setAllLoading] = useState(false);
-  const [allMessage, setAllMessage] = useState('');
-  const [allLoaded, setAllLoaded] = useState(false);
-
-  async function loadAllComplaints() {
-    setAllLoading(true);
-    setAllMessage('');
-
-    const { data: rows, error } = await supabase
-      .from('complaint_records')
-      .select('*')
-      .order('complaint_date', { ascending: false });
-
-    if (error) {
-      setAllLoading(false);
-      setAllComplaints([]);
-      setAllMessage('Could not load complaints: ' + error.message);
-      return;
-    }
-
-    const vehicleIds = [...new Set((rows || []).map((r) => r.vehicle_id).filter(Boolean))];
-    const employeeIds = [...new Set((rows || []).map((r) => r.employee_id).filter(Boolean))];
-    let vehiclesData = [], employeesData = [];
-
-    if (vehicleIds.length > 0) {
-      const { data } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
-      vehiclesData = data || [];
-    }
-    if (employeeIds.length > 0) {
-      const { data } = await supabase.from('employees').select('*').in('id', employeeIds);
-      employeesData = data || [];
-    }
-
-    setAllComplaints((rows || []).map((r) => ({
-      ...r,
-      vehicles: vehiclesData.find((v) => v.id === r.vehicle_id) || null,
-      employees: employeesData.find((e) => e.id === r.employee_id) || null,
-    })));
-    setAllLoading(false);
-    setAllLoaded(true);
-  }
-
-  function openStatusTab() {
-    setTab('status');
-    if (!allLoaded) loadAllComplaints();
-  }
-
-  useEffect(() => {
-    if (currentUser.role === 'driver' && currentUser.gs_no) findEmployee();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  async function findEmployee() {
+  const findEmployee = useCallback(async () => {
     if (!gsNo.trim()) { setEmployee(null); setEmployeeMessage('Please enter GS No'); return; }
     setEmployeeLoading(true); setEmployeeMessage('');
     const { data, error } = await supabase.from('employees').select('*').eq('gs_no', gsNo.trim()).maybeSingle();
@@ -171,9 +133,14 @@ function DriverScreen({ currentUser }) {
     if (error) { setEmployee(null); setEmployeeMessage(error.message); return; }
     if (!data) { setEmployee(null); setEmployeeMessage('Employee not found'); return; }
     setEmployee(data);
-  }
+  }, [gsNo]);
 
-  async function findVehicle() {
+  useEffect(() => {
+    if (currentUser.role === 'driver' && currentUser.gs_no) findEmployee();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const findVehicle = useCallback(async () => {
     if (!vehicleNo.trim()) { setVehicle(null); setVehicleMessage('Please enter Plate No or Asset No'); return; }
     setVehicleLoading(true); setVehicleMessage('');
     const value = vehicleNo.trim();
@@ -182,11 +149,11 @@ function DriverScreen({ currentUser }) {
     if (error) { setVehicle(null); setVehicleMessage(error.message); return; }
     if (!data) { setVehicle(null); setVehicleMessage('Vehicle not found'); return; }
     setVehicle(data);
-  }
+  }, [vehicleNo]);
 
-  function addComplaint() { setComplaints([...complaints, '']); }
-  function updateComplaint(i, v) { const u = [...complaints]; u[i] = v; setComplaints(u); }
-  function removeComplaint(i) { if (complaints.length === 1) return; setComplaints(complaints.filter((_, idx) => idx !== i)); }
+  function addComplaint() { setComplaints((c) => [...c, '']); }
+  function updateComplaint(i, v) { setComplaints((c) => c.map((t, idx) => (idx === i ? v : t))); }
+  function removeComplaint(i) { setComplaints((c) => (c.length === 1 ? c : c.filter((_, idx) => idx !== i))); }
 
   async function submitComplaints() {
     setSaveMessage('');
@@ -209,30 +176,11 @@ function DriverScreen({ currentUser }) {
     setSaveMessage(`✓ ${valid.length} complaint(s) submitted successfully.`);
     setComplaints(['']);
     setComplaintDate(getTodayString());
-    setAllLoaded(false); // next visit to the status tab picks up the new record
-  }
-
-  if (tab === 'status') {
-    return (
-      <>
-        <div className="driverTabSwitch">
-          <button className="modeButton" onClick={() => setTab('form')}>📝 Submit Complaint</button>
-          <button className="modeButton activeMode" onClick={openStatusTab}>📋 Complaint Status</button>
-        </div>
-        {allLoading && <p className="loadingText">Loading complaints...</p>}
-        {allMessage && <div className="errorMessage">⚠ {allMessage}</div>}
-        {!allLoading && <AdminReport complaints={allComplaints} onBack={() => setTab('form')} backLabel="← Back to Complaint Form" />}
-      </>
-    );
+    onSubmitted?.();
   }
 
   return (
     <>
-      <div className="driverTabSwitch">
-        <button className="modeButton activeMode" onClick={() => setTab('form')}>📝 Submit Complaint</button>
-        <button className="modeButton" onClick={openStatusTab}>📋 Complaint Status</button>
-      </div>
-
       <section className="card">
         <div className="sectionTitle">
           <span className="iconCircle iconIndigo">👤</span>
@@ -248,6 +196,7 @@ function DriverScreen({ currentUser }) {
             <div className="verified"><span className="checkBadge">✓</span> Verified Employee</div>
             <div className="infoGrid">
               <div className="infoRow"><span>Name</span><strong>{employee.name || '-'}</strong></div>
+              <div className="infoRow"><span>GS No</span><strong>{employee.gs_no || '-'}</strong></div>
               <div className="infoRow"><span>Designation</span><strong>{employee.designation || '-'}</strong></div>
               <div className="infoRow"><span>Phone</span><strong>{employee.phone || '-'}</strong></div>
             </div>
@@ -306,11 +255,14 @@ function DriverScreen({ currentUser }) {
 }
 
 /* =====================================================
-   ADMIN REPORT (with filters + CSV export + print)
+   REPORT VIEW (read-only)
+   Letterhead + filter tabs + plate/asset search + CSV export
+   + print. Used by drivers (always) and by admins (via "Open
+   Full Report"). Never shows any admin action controls.
 ===================================================== */
 const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
 
-function AdminReport({ complaints, onBack, backLabel }) {
+function ReportView({ complaints, loading, message, onBack, showBack }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
 
@@ -326,10 +278,11 @@ function AdminReport({ complaints, onBack, backLabel }) {
   }, [complaints, filter, q]);
 
   function exportCsv() {
-    const header = ['S.No', 'Vehicle', 'Asset No', 'Driver', 'Complaint', 'Complaint Date', 'Completed Date', 'Status', 'Days'];
+    const header = ['S.No', 'Vehicle', 'Asset No', 'Driver', 'GS No', 'Complaint', 'Complaint Date', 'Completed Date', 'Status', 'Days'];
     const lines = rows.map((c, i) => [
       i + 1, c.vehicles?.plate_no || '-', c.vehicles?.asset_no || '-', c.employees?.name || '-',
-      `"${(c.complaint_text || '').replace(/"/g, '""')}"`, c.complaint_date, c.completed_date || '-',
+      c.employees?.gs_no || '-',
+      `"${(c.complaint_text || '').replace(/"/g, '""')}"`, formatDMY(c.complaint_date) || '-', formatDMY(c.completed_date) || '-',
       c.status, daysBetween(c.complaint_date, c.completed_date),
     ].join(','));
     const csv = [header.join(','), ...lines].join('\n');
@@ -342,9 +295,11 @@ function AdminReport({ complaints, onBack, backLabel }) {
 
   return (
     <div id="reportPrintArea">
-      <div className="reportTopBar noPrint">
-        <button className="reportBackButton" onClick={onBack}>{backLabel || '← Back to Dashboard'}</button>
-      </div>
+      {showBack && (
+        <div className="reportTopBar noPrint">
+          <button className="reportBackButton" onClick={onBack}>← Back to Dashboard</button>
+        </div>
+      )}
 
       <section className="reportLetterhead">
         <img src={spicDriveLogo} alt="SPIC DRIVE" className="reportLetterheadLogo" />
@@ -354,7 +309,7 @@ function AdminReport({ complaints, onBack, backLabel }) {
         </div>
         <div className="reportLetterheadMeta">
           <span>{FILTER_LABELS[filter]}</span>
-          <span>Generated {getTodayString()}</span>
+          <span>Generated {formatDMY(getTodayString())}</span>
         </div>
       </section>
 
@@ -376,27 +331,28 @@ function AdminReport({ complaints, onBack, backLabel }) {
       <section className="card">
         <div className="reportTableCaption">
           <span>{FILTER_LABELS[filter]}</span>
-          <span className="reportTableCount">{rows.length} record{rows.length === 1 ? '' : 's'}</span>
+          <span className="reportTableCount">{loading ? 'Loading…' : `${rows.length} record${rows.length === 1 ? '' : 's'}`}</span>
         </div>
+        {message && <div className="errorMessage">⚠ {message}</div>}
         <div className="reportTableWrapper">
           <table className="reportTable">
             <thead>
-              <tr><th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th><th>Complaint Date</th><th>Completed</th><th>Status</th><th>Days</th></tr>
+              <tr><th>#</th><th>Vehicle</th><th>Driver (GS No)</th><th className="reportComplaintCell">Complaint</th><th>Complaint Date</th><th>Completed</th><th>Status</th><th>Days</th></tr>
             </thead>
             <tbody>
               {rows.map((c, i) => (
                 <tr key={c.id}>
                   <td>{i + 1}</td>
                   <td>{c.vehicles?.plate_no || '-'}</td>
-                  <td>{c.employees?.name || '-'}</td>
+                  <td>{c.employees?.name ? `${c.employees.name}${c.employees.gs_no ? ` (${c.employees.gs_no})` : ''}` : '-'}</td>
                   <td className="reportComplaintCell">{c.complaint_text}</td>
-                  <td>{c.complaint_date}</td>
-                  <td>{c.completed_date || '—'}</td>
+                  <td>{formatDMY(c.complaint_date) || '-'}</td>
+                  <td>{formatDMY(c.completed_date) || '—'}</td>
                   <td><span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span></td>
                   <td>{daysBetween(c.complaint_date, c.completed_date)}</td>
                 </tr>
               ))}
-              {rows.length === 0 && (
+              {!loading && rows.length === 0 && (
                 <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>No matching records</td></tr>
               )}
             </tbody>
@@ -408,16 +364,54 @@ function AdminReport({ complaints, onBack, backLabel }) {
 }
 
 /* =====================================================
-   ADMIN SCREEN
+   DRIVER EXPERIENCE
+   Two lightweight tabs: Submit Complaint / Complaint Status.
+   Used for real drivers, and for an admin previewing driver mode.
 ===================================================== */
-function AdminScreen({
-  adminSearch, setAdminSearch, loadAdminComplaints, adminLoading, adminMessage,
-  pending, completed, total, averageRepairDays, allComplaints,
-  calculateDays, completedDates, handleCompletedDate, getToday, completeComplaint,
-}) {
-  const [view, setView] = useState('dashboard');
+function DriverExperience({ currentUser, complaints, complaintsLoading, complaintsMessage, onRefresh }) {
+  const [tab, setTab] = useState('submit');
 
-  if (view === 'report') return <AdminReport complaints={allComplaints} onBack={() => setView('dashboard')} />;
+  return (
+    <>
+      <div className="modeSwitch">
+        <button className={tab === 'submit' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('submit')}>📝 Submit Complaint</button>
+        <button className={tab === 'report' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('report')}>📋 Complaint Status</button>
+      </div>
+      {tab === 'submit' ? (
+        <SubmitComplaintPanel currentUser={currentUser} onSubmitted={onRefresh} />
+      ) : (
+        <ReportView complaints={complaints} loading={complaintsLoading} message={complaintsMessage} showBack={false} />
+      )}
+    </>
+  );
+}
+
+/* =====================================================
+   ADMIN DASHBOARD (pending / completed + mark-complete)
+===================================================== */
+function AdminDashboard({
+  complaints, adminSearch, setAdminSearch, refreshing, message,
+  completedDates, handleCompletedDate, completeComplaint, onOpenReport, onRefresh,
+}) {
+  const searchValue = adminSearch.trim().toLowerCase();
+
+  const visible = useMemo(() => {
+    if (!searchValue) return complaints;
+    return complaints.filter((item) => {
+      const plate = item.vehicles?.plate_no?.toString().toLowerCase() || '';
+      const asset = item.vehicles?.asset_no?.toString().toLowerCase() || '';
+      return plate.includes(searchValue) || asset.includes(searchValue);
+    });
+  }, [complaints, searchValue]);
+
+  const pending = useMemo(() => visible.filter((c) => c.status === 'Pending'), [visible]);
+  const completed = useMemo(() => visible.filter((c) => c.status === 'Completed'), [visible]);
+  const total = visible.length;
+  const averageRepairDays = useMemo(() => {
+    const durations = completed.map((c) => daysBetween(c.complaint_date, c.completed_date));
+    if (!durations.length) return 0;
+    return Math.round(durations.reduce((s, d) => s + d, 0) / durations.length);
+  }, [completed]);
 
   return (
     <>
@@ -432,7 +426,7 @@ function AdminScreen({
           <div className="dashboardCard"><span className="dot dotGold" /><div><span>Total</span><strong>{total}</strong></div></div>
           <div className="dashboardCard"><span className="dot dotIndigo" /><div><span>Avg. Repair</span><strong>{averageRepairDays}d</strong></div></div>
         </div>
-        <button className="reportCtaButton" onClick={() => setView('report')}>📋 Open Full Report</button>
+        <button className="reportCtaButton" onClick={onOpenReport}>📋 Open Full Report</button>
       </section>
 
       <section className="card">
@@ -442,26 +436,26 @@ function AdminScreen({
         </div>
         <div className="searchRow">
           <input type="text" value={adminSearch} onChange={(e) => setAdminSearch(e.target.value)} placeholder="Filter by Plate No / Asset No" autoComplete="off" />
-          <button className="btnPrimary" onClick={loadAdminComplaints}>{adminLoading ? <span className="spinner" /> : 'Refresh'}</button>
+          <button className="btnPrimary" onClick={onRefresh}>{refreshing ? <span className="spinner" /> : 'Refresh'}</button>
         </div>
-        {adminMessage && <div className="saveMessage fadeIn">{adminMessage}</div>}
+        {message && <div className="saveMessage fadeIn">{message}</div>}
       </section>
 
       <section className="card">
         <div className="adminSectionTitle"><span>🔴 Pending</span><span className="countBadge pendingCount">{pending.length}</span></div>
-        {adminLoading && <p className="loadingText">Loading complaints...</p>}
-        {!adminLoading && pending.length === 0 && <div className="emptyState">No pending complaints 🎉</div>}
+        {refreshing && <p className="loadingText">Loading complaints...</p>}
+        {!refreshing && pending.length === 0 && <div className="emptyState">No pending complaints 🎉</div>}
         {pending.map((complaint) => (
           <div className="adminComplaint" key={complaint.id}>
             <div className="adminComplaintTop"><strong>{complaint.complaint_text}</strong><span className="badge pendingBadge">PENDING</span></div>
             <div className="adminInfoGrid">
               <div className="adminInfo"><span>Vehicle</span><strong>{complaint.vehicles?.plate_no || '-'}</strong></div>
-              <div className="adminInfo"><span>Driver</span><strong>{complaint.employees?.name || '-'}</strong></div>
-              <div className="adminInfo"><span>Complaint Date</span><strong>{complaint.complaint_date}</strong></div>
+              <div className="adminInfo"><span>Driver</span><strong>{complaint.employees?.name || '-'}{complaint.employees?.gs_no ? ` (${complaint.employees.gs_no})` : ''}</strong></div>
+              <div className="adminInfo"><span>Complaint Date</span><strong>{formatDMY(complaint.complaint_date)}</strong></div>
             </div>
-            <div className="daysBox">⏳ Pending for <strong>{calculateDays(complaint)} Days</strong></div>
+            <div className="daysBox">⏳ Pending for <strong>{daysBetween(complaint.complaint_date, null)} Days</strong></div>
             <div className="completeRow">
-              <input type="date" value={completedDates[complaint.id] || getToday()} onChange={(e) => handleCompletedDate(complaint.id, e.target.value)} />
+              <input type="date" value={completedDates[complaint.id] || getTodayString()} onChange={(e) => handleCompletedDate(complaint.id, e.target.value)} />
               <button className="completeButton" onClick={() => completeComplaint(complaint.id)}>✓ Mark Completed</button>
             </div>
           </div>
@@ -476,10 +470,10 @@ function AdminScreen({
             <div className="adminComplaintTop"><strong>{complaint.complaint_text}</strong><span className="badge completedBadge">COMPLETED</span></div>
             <div className="adminInfoGrid">
               <div className="adminInfo"><span>Vehicle</span><strong>{complaint.vehicles?.plate_no || '-'}</strong></div>
-              <div className="adminInfo"><span>Complaint Date</span><strong>{complaint.complaint_date}</strong></div>
-              <div className="adminInfo"><span>Completed Date</span><strong>{complaint.completed_date}</strong></div>
+              <div className="adminInfo"><span>Complaint Date</span><strong>{formatDMY(complaint.complaint_date)}</strong></div>
+              <div className="adminInfo"><span>Completed Date</span><strong>{formatDMY(complaint.completed_date)}</strong></div>
             </div>
-            <div className="daysBox completedDays">✓ Repair Duration: <strong>{calculateDays(complaint)} Days</strong></div>
+            <div className="daysBox completedDays">✓ Repair Duration: <strong>{daysBetween(complaint.complaint_date, complaint.completed_date)} Days</strong></div>
           </div>
         ))}
       </section>
@@ -492,83 +486,68 @@ function AdminScreen({
 ===================================================== */
 function App() {
   const [currentUser, setCurrentUser] = useState(null);
-  const [mode, setMode] = useState('driver');
+  const [mode, setMode] = useState('admin'); // admin-only: 'admin' dashboard vs 'driver' preview
 
+  const [complaints, setComplaints] = useState([]);
+  const [complaintsLoading, setComplaintsLoading] = useState(false);
+  const [message, setMessage] = useState('');
   const [adminSearch, setAdminSearch] = useState('');
-  const [adminComplaints, setAdminComplaints] = useState([]);
-  const [adminLoading, setAdminLoading] = useState(false);
-  const [adminMessage, setAdminMessage] = useState('');
   const [completedDates, setCompletedDates] = useState({});
+  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report'
 
-  async function loadAdminComplaints() {
-    setAdminMessage('');
-    setAdminLoading(true);
+  // Single shared fetch — used by drivers (report tab), admins (dashboard +
+  // report). Employees/vehicles are pulled once per fetch via id lookup maps
+  // instead of repeated Array#find calls during render.
+  const fetchComplaints = useCallback(async () => {
+    setMessage('');
+    setComplaintsLoading(true);
 
     const { data: complaintsData, error: complaintsError } = await supabase
       .from('complaint_records').select('*').order('complaint_date', { ascending: false });
 
     if (complaintsError) {
-      setAdminLoading(false); setAdminComplaints([]);
-      setAdminMessage('Load failed: ' + complaintsError.message);
+      setComplaintsLoading(false); setComplaints([]);
+      setMessage('Load failed: ' + complaintsError.message);
       return;
     }
 
     const vehicleIds = [...new Set((complaintsData || []).map((i) => i.vehicle_id).filter(Boolean))];
     const employeeIds = [...new Set((complaintsData || []).map((i) => i.employee_id).filter(Boolean))];
-    let vehiclesData = [], employeesData = [];
+    let vehiclesMap = new Map(), employeesMap = new Map();
 
     if (vehicleIds.length > 0) {
       const { data, error } = await supabase.from('vehicles').select('*').in('id', vehicleIds);
-      if (error) { setAdminLoading(false); setAdminMessage('Vehicle load failed: ' + error.message); return; }
-      vehiclesData = data || [];
+      if (error) { setComplaintsLoading(false); setMessage('Vehicle load failed: ' + error.message); return; }
+      vehiclesMap = toMap(data);
     }
     if (employeeIds.length > 0) {
       const { data, error } = await supabase.from('employees').select('*').in('id', employeeIds);
-      if (error) { setAdminLoading(false); setAdminMessage('Employee load failed: ' + error.message); return; }
-      employeesData = data || [];
+      if (error) { setComplaintsLoading(false); setMessage('Employee load failed: ' + error.message); return; }
+      employeesMap = toMap(data);
     }
 
     const finalData = (complaintsData || []).map((c) => ({
       ...c,
-      vehicles: vehiclesData.find((v) => v.id === c.vehicle_id) || null,
-      employees: employeesData.find((e) => e.id === c.employee_id) || null,
+      vehicles: vehiclesMap.get(c.vehicle_id) || null,
+      employees: employeesMap.get(c.employee_id) || null,
     }));
-    setAdminComplaints(finalData);
-    setAdminLoading(false);
-  }
-
-  const searchValue = adminSearch.trim().toLowerCase();
-  const visibleComplaints = searchValue
-    ? adminComplaints.filter((item) => {
-        const plate = item.vehicles?.plate_no?.toString().toLowerCase() || '';
-        const asset = item.vehicles?.asset_no?.toString().toLowerCase() || '';
-        return plate.includes(searchValue) || asset.includes(searchValue);
-      })
-    : adminComplaints;
-
-  function calculateDays(complaint) { return daysBetween(complaint.complaint_date, complaint.status === 'Completed' ? complaint.completed_date : null); }
-
-  async function completeComplaint(id) {
-    const date = completedDates[id] || getTodayString();
-    const { error } = await supabase.from('complaint_records').update({ status: 'Completed', completed_date: date }).eq('id', id);
-    if (error) { setAdminMessage('Update failed: ' + error.message); return; }
-    setAdminMessage('✓ Complaint completed successfully.');
-    loadAdminComplaints();
-  }
-
-  function handleCompletedDate(id, date) { setCompletedDates({ ...completedDates, [id]: date }); }
+    setComplaints(finalData);
+    setComplaintsLoading(false);
+  }, []);
 
   useEffect(() => {
-    if (currentUser?.role === 'admin' && mode === 'admin') loadAdminComplaints();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mode, currentUser]);
+    if (currentUser) fetchComplaints();
+  }, [currentUser, fetchComplaints]);
 
-  const pending = visibleComplaints.filter((c) => c.status === 'Pending');
-  const completed = visibleComplaints.filter((c) => c.status === 'Completed');
-  const total = visibleComplaints.length;
-  const completedDurations = completed.map((c) => calculateDays(c));
-  const averageRepairDays = completedDurations.length
-    ? Math.round(completedDurations.reduce((s, d) => s + d, 0) / completedDurations.length) : 0;
+  const completeComplaint = useCallback(async (id) => {
+    const date = completedDates[id] || getTodayString();
+    const { error } = await supabase.from('complaint_records').update({ status: 'Completed', completed_date: date }).eq('id', id);
+    if (error) { setMessage('Update failed: ' + error.message); return; }
+    setMessage('✓ Complaint completed successfully.');
+    fetchComplaints();
+  }, [completedDates, fetchComplaints]);
+
+  function handleCompletedDate(id, date) { setCompletedDates((prev) => ({ ...prev, [id]: date })); }
 
   if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />;
 
@@ -594,16 +573,36 @@ function App() {
       )}
 
       <main className="container">
-        {(currentUser.role === 'driver' || mode === 'driver') ? (
-          <DriverScreen currentUser={currentUser} />
+        {currentUser.role === 'driver' ? (
+          <DriverExperience
+            currentUser={currentUser}
+            complaints={complaints}
+            complaintsLoading={complaintsLoading}
+            complaintsMessage={message}
+            onRefresh={fetchComplaints}
+          />
+        ) : mode === 'driver' ? (
+          <DriverExperience
+            currentUser={currentUser}
+            complaints={complaints}
+            complaintsLoading={complaintsLoading}
+            complaintsMessage={message}
+            onRefresh={fetchComplaints}
+          />
+        ) : adminView === 'report' ? (
+          <ReportView complaints={complaints} loading={complaintsLoading} message={message} showBack onBack={() => setAdminView('dashboard')} />
         ) : (
-          <AdminScreen
-            adminSearch={adminSearch} setAdminSearch={setAdminSearch}
-            loadAdminComplaints={loadAdminComplaints} adminLoading={adminLoading} adminMessage={adminMessage}
-            pending={pending} completed={completed} total={total} averageRepairDays={averageRepairDays}
-            allComplaints={visibleComplaints}
-            calculateDays={calculateDays} completedDates={completedDates}
-            handleCompletedDate={handleCompletedDate} getToday={getTodayString} completeComplaint={completeComplaint}
+          <AdminDashboard
+            complaints={complaints}
+            adminSearch={adminSearch}
+            setAdminSearch={setAdminSearch}
+            refreshing={complaintsLoading}
+            message={message}
+            completedDates={completedDates}
+            handleCompletedDate={handleCompletedDate}
+            completeComplaint={completeComplaint}
+            onOpenReport={() => setAdminView('report')}
+            onRefresh={fetchComplaints}
           />
         )}
       </main>
@@ -625,7 +624,11 @@ export default App;
       link) and drive `role` off a `profiles` table keyed to
       auth.uid(), with Row Level Security policies restricting
       writes to `complaint_records` to authenticated users.
-   2. Add a `users` table now (username, password, role, name,
-      gs_no) to unblock the login screen immediately; treat it as
-      a stepping stone to #1.
+   2. `users` table (username, password, role, name, gs_no) is a
+      stepping stone to #1.
+   3. PERF: complaints/vehicles/employees are fetched once per
+      login (or on explicit refresh/submit/complete) and shared
+      across the driver, report, and dashboard views via props —
+      no per-screen duplicate queries, and id lookups use Map
+      instead of repeated Array#find.
 ===================================================== */
