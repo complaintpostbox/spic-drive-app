@@ -411,6 +411,20 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
    route, total distance, and travel time itself. Locations are
    fetched only when this tab mounts, so it never touches the
    complaints data path or slows the other tabs.
+
+   FIXES APPLIED:
+   1. ID lookup bug — <select> values from e.target.value are
+      ALWAYS strings, but Supabase's `id` column comes back as a
+      number. locationsById is now keyed by String(l.id) so it
+      matches the string startId/endId/stopIds coming out of the
+      dropdowns. (Using the shared toMap() helper — numeric keys —
+      silently failed every .get() call with a string argument.)
+   2. Desktop layout — Starting Point / End Point sit in a
+      2-column grid (.routeEndpoints) on wider screens instead of
+      always stacking full-width.
+   3. Touch target — the per-stop remove button uses
+      .removeStopButton (40px, vs. the old 26px .deleteComplaint)
+      so it's comfortably tappable on a phone.
 ===================================================== */
 function RoutePlanner() {
   const [locations, setLocations] = useState([]);
@@ -433,7 +447,13 @@ function RoutePlanner() {
     return () => { active = false; };
   }, []);
 
-  const locationsById = useMemo(() => toMap(locations), [locations]);
+  // Keyed by String(id) to match the string values <select> always
+  // produces via e.target.value — this is the fix for the lookup mismatch.
+  const locationsById = useMemo(() => {
+    const m = new Map();
+    locations.forEach((l) => m.set(String(l.id), l));
+    return m;
+  }, [locations]);
 
   function addStop() { setStopIds((s) => [...s, '']); }
   function updateStop(i, v) { setStopIds((s) => s.map((x, idx) => (idx === i ? v : x))); }
@@ -444,11 +464,15 @@ function RoutePlanner() {
   function openInGoogleMaps() {
     const origin = locationsById.get(startId);
     const destination = locationsById.get(endId);
-    if (!origin || !destination) return;
+    if (!origin || !destination) {
+      setMessage('Could not match the selected start/end location — please re-select them and try again.');
+      return;
+    }
     if (!formatMapPoint(origin) || !formatMapPoint(destination)) {
       setMessage('The selected start or end location has no name or address saved — edit it in Manage Locations first.');
       return;
     }
+    setMessage('');
     const waypoints = stopIds.map((id) => locationsById.get(id)).filter(Boolean);
     window.open(buildGoogleMapsUrl(origin, destination, waypoints), '_blank', 'noopener,noreferrer');
   }
@@ -469,23 +493,33 @@ function RoutePlanner() {
 
       {!loading && locations.length > 0 && (
         <>
-          <div className="dateField">
-            <label className="fieldLabel">Starting Point</label>
-            <select value={startId} onChange={(e) => setStartId(e.target.value)}>
-              <option value="">Select starting location</option>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+          <div className="routeEndpoints">
+            <div className="dateField">
+              <label className="fieldLabel">Starting Point</label>
+              <select value={startId} onChange={(e) => setStartId(e.target.value)}>
+                <option value="">Select starting location</option>
+                {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+              </select>
+            </div>
+
+            <div className="dateField">
+              <label className="fieldLabel">End Point</label>
+              <select value={endId} onChange={(e) => setEndId(e.target.value)}>
+                <option value="">Select destination</option>
+                {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
+              </select>
+            </div>
           </div>
 
           {stopIds.map((id, i) => (
             <div className="dateField" key={i}>
               <label className="fieldLabel">Point {i + 1}</label>
-              <div className="searchRow">
+              <div className="routeStopRow">
                 <select value={id} onChange={(e) => updateStop(i, e.target.value)}>
                   <option value="">Select stop</option>
-                  {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+                  {locations.map((l) => <option key={l.id} value={String(l.id)}>{l.name}</option>)}
                 </select>
-                <button className="deleteComplaint" onClick={() => removeStop(i)}>✕</button>
+                <button className="removeStopButton" onClick={() => removeStop(i)} aria-label={`Remove point ${i + 1}`}>✕</button>
               </div>
             </div>
           ))}
@@ -494,14 +528,6 @@ function RoutePlanner() {
           {stopIds.length > 8 && (
             <div className="errorMessage">⚠ Google Maps supports up to 9 stops — consider splitting long routes.</div>
           )}
-
-          <div className="dateField">
-            <label className="fieldLabel">End Point</label>
-            <select value={endId} onChange={(e) => setEndId(e.target.value)}>
-              <option value="">Select destination</option>
-              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-          </div>
 
           <button className="submitButton" onClick={openInGoogleMaps} disabled={!canOpen}>
             🗺 Open Route in Google Maps
@@ -906,10 +932,10 @@ export default App;
       writes to `complaint_records` to authenticated users.
    2. `users` table (username, password, role, name, gs_no) is a
       stepping stone to #1.
-   3. NEW: add a `locations` table (id, name, address) in Supabase
-      for Manage Locations / Route Planner to work — address can be
-      a normal address string or "lat,lng"; it's passed straight to
-      Google Maps as an origin/destination/waypoint.
+   3. `locations` table (id, name, address) in Supabase for Manage
+      Locations / Route Planner — address can be a normal address
+      string or "lat,lng"; it's passed straight to Google Maps as
+      an origin/destination/waypoint.
    4. PERF: complaints/vehicles/employees are fetched once per
       login (or on explicit refresh/submit/complete) and shared
       across the driver, report, and dashboard views via props —
@@ -917,4 +943,17 @@ export default App;
       instead of repeated Array#find. Locations load separately
       and only when the Route Planner / Manage Locations screen
       actually mounts, so they never touch the complaints path.
+   5. FIXED: RoutePlanner's locationsById Map is keyed by
+      String(id), not the raw Supabase numeric id — <select>
+      elements always yield string values via e.target.value, so
+      a numeric-keyed Map silently failed every lookup. Any future
+      dropdown driven by a Supabase id should follow the same
+      pattern.
+   6. RESPONSIVE/TOUCH: see App.css — 16px form-field font size
+      (prevents iOS auto-zoom-on-focus), min-width:0 on flex/grid
+      children (prevents mobile overflow), 40px+ touch targets on
+      icon-only buttons, touch-action:manipulation app-wide (kills
+      the ~300ms tap delay + prevents double-tap zoom), and a
+      tablet/desktop breakpoint that widens the app shell and lays
+      the Route Planner's Start/End fields out side by side.
 ===================================================== */
