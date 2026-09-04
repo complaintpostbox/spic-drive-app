@@ -50,8 +50,15 @@
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--slate-50); color: var(--slate-900); }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--slate-50); color: var(--slate-900); overflow-x: hidden; }
 h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
+
+/* Touch-friendly baseline: kills the ~300ms tap delay on mobile browsers
+   and stops double-tap-to-zoom from eating a first tap on any control. */
+button, select, input, textarea, a {
+  touch-action: manipulation;
+}
 
 /* ---------------- LOGIN ---------------- */
 .loginWrap {
@@ -89,13 +96,13 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
   transition: border-color 0.2s ease, background 0.2s ease;
 }
 .loginInputRow:focus-within { border-color: var(--indigo-500); background: rgba(255, 255, 255, 0.09); }
-.loginInputRow input { flex: 1; border: none; background: transparent; outline: none; color: #fff; font-size: 14px; }
+.loginInputRow input { flex: 1; min-width: 0; border: none; background: transparent; outline: none; color: #fff; font-size: 16px; }
 .loginInputRow input::placeholder { color: rgba(255, 255, 255, 0.35); }
 .loginError { color: #FCA5A5; font-size: 12.5px; margin-top: 14px; }
 .loginButton {
   width: 100%; margin-top: 24px; border: none; padding: 13px; border-radius: var(--radius-sm);
   background: linear-gradient(135deg, var(--indigo-600), var(--indigo-500)); color: #fff;
-  font-weight: 700; font-size: 14.5px; cursor: pointer;
+  font-weight: 700; font-size: 14.5px; cursor: pointer; min-height: 46px;
   box-shadow: var(--shadow-glow); transition: transform 0.15s ease;
 }
 .loginButton:hover { transform: translateY(-1px); }
@@ -103,6 +110,13 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
 
 /* ---------------- APP SHELL ---------------- */
 .app { max-width: 560px; margin: 0 auto; min-height: 100vh; padding-bottom: 48px; }
+
+/* Desktop/tablet: stop hard-capping at phone width. Route Planner also
+   picks up a 2-column layout for its Start/End fields at this breakpoint
+   (see .routeEndpoints below). */
+@media (min-width: 700px) {
+  .app { max-width: 720px; }
+}
 
 .header {
   display: flex; align-items: center; justify-content: space-between; padding: 20px 22px;
@@ -114,7 +128,7 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
   content: ''; position: absolute; top: -70px; right: -40px; width: 200px; height: 200px;
   background: radial-gradient(circle, var(--indigo-glow), transparent 70%); border-radius: 50%;
 }
-.brandRow { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; }
+.brandRow { display: flex; align-items: center; gap: 13px; position: relative; z-index: 1; min-width: 0; }
 
 .logoBadge {
   width: 46px; height: 46px; min-width: 46px; border-radius: 14px;
@@ -128,7 +142,7 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
 .headerSub { font-size: 12px; opacity: 0.75; margin-top: 2px; font-weight: 500; }
 .logoutButton {
   position: relative; z-index: 1; border: 1px solid rgba(255, 255, 255, 0.18);
-  background: rgba(255, 255, 255, 0.08); color: #fff; width: 38px; height: 38px;
+  background: rgba(255, 255, 255, 0.08); color: #fff; width: 42px; height: 42px; min-width: 42px;
   border-radius: 11px; display: flex; align-items: center; justify-content: center; cursor: pointer;
 }
 
@@ -142,14 +156,15 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
 .modeButton {
   flex: 1; border: none; background: transparent; padding: 11px; font-size: 14px; font-weight: 600;
   color: var(--slate-500); border-radius: var(--radius-sm); cursor: pointer; transition: all 0.2s ease;
+  min-height: 44px;
 }
 .modeButton.activeMode { background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; box-shadow: var(--shadow-glow); }
 .modeButton:not(.activeMode):hover { background: var(--slate-100); color: var(--slate-700); }
 
-.container { padding: 20px 16px 0; display: flex; flex-direction: column; gap: 18px; }
+.container { padding: 20px 16px 0; display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 
 /* ---------------- CARD ---------------- */
-.card { background: #fff; border-radius: var(--radius-lg); padding: 22px; box-shadow: var(--shadow-md); border: 1px solid rgba(15, 23, 42, 0.04); transition: box-shadow 0.2s ease; }
+.card { background: #fff; border-radius: var(--radius-lg); padding: 22px; box-shadow: var(--shadow-md); border: 1px solid rgba(15, 23, 42, 0.04); transition: box-shadow 0.2s ease; min-width: 0; }
 .card:hover { box-shadow: var(--shadow-lg); }
 .sectionTitle { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; }
 .sectionTitle h2 { margin: 0; font-size: 16px; font-weight: 700; color: var(--slate-900); }
@@ -161,22 +176,29 @@ h1, h2, .logo, .loginBrand { font-family: 'Sora', sans-serif; }
 
 /* ---------------- INPUTS ---------------- */
 .searchRow { display: flex; gap: 10px; }
+.searchRow > input, .searchRow > select { min-width: 0; } /* prevents flex overflow on narrow phones */
 .fieldLabel { display: block; font-size: 12px; font-weight: 600; color: var(--slate-500); margin: 0 0 6px 2px; }
+
+/* font-size:16px is deliberate, not cosmetic — anything smaller makes iOS
+   Safari auto-zoom the page on focus, which is what made form fields feel
+   "broken" on phones. min-height:44px meets the standard touch-target
+   guideline (Apple HIG / Material Design both recommend ~44-48px). */
 input, textarea, select {
-  width: 100%; border: 1.5px solid var(--slate-300); border-radius: var(--radius-sm); padding: 12px 14px;
-  font-size: 14px; font-family: inherit; color: var(--slate-900); background: var(--slate-50);
+  width: 100%; min-width: 0; border: 1.5px solid var(--slate-300); border-radius: var(--radius-sm); padding: 12px 14px;
+  font-size: 16px; font-family: inherit; color: var(--slate-900); background: var(--slate-50);
   outline: none; transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  min-height: 46px;
 }
 input:focus, textarea:focus, select:focus { border-color: var(--indigo-500); background: #fff; box-shadow: 0 0 0 4px rgba(79, 95, 245, 0.12); }
 select { cursor: pointer; }
-textarea { resize: vertical; }
+textarea { resize: vertical; min-height: 70px; }
 .dateField { margin-bottom: 14px; }
 
 /* ---------------- BUTTONS ---------------- */
 .btnPrimary {
   border: none; background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff;
   padding: 0 20px; border-radius: var(--radius-sm); font-weight: 600; font-size: 14px; cursor: pointer;
-  min-width: 88px; box-shadow: 0 4px 14px rgba(13, 20, 36, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease;
+  min-width: 88px; min-height: 46px; box-shadow: 0 4px 14px rgba(13, 20, 36, 0.25); transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 .btnPrimary:hover { transform: translateY(-1px); }
 .btnPrimary:active { transform: translateY(0); }
@@ -198,20 +220,24 @@ textarea { resize: vertical; }
 .vehicleMain strong { font-size: 18px; color: var(--slate-900); }
 .vehicleMain span { font-size: 12.5px; color: var(--slate-500); margin-top: 2px; }
 .infoGrid { display: flex; flex-direction: column; gap: 8px; }
-.infoRow { display: flex; justify-content: space-between; font-size: 13.5px; padding: 6px 0; border-bottom: 1px dashed rgba(15, 23, 42, 0.08); }
+.infoRow { display: flex; justify-content: space-between; gap: 10px; font-size: 13.5px; padding: 6px 0; border-bottom: 1px dashed rgba(15, 23, 42, 0.08); }
 .infoRow:last-child { border-bottom: none; }
 .infoRow span { color: var(--slate-500); }
-.infoRow strong { color: var(--slate-900); font-weight: 600; }
+.infoRow strong { color: var(--slate-900); font-weight: 600; text-align: right; }
 
 /* ---------------- COMPLAINTS ---------------- */
 .complaintItem { background: var(--slate-50); border: 1px solid var(--slate-100); border-radius: var(--radius-md); padding: 14px; margin-bottom: 12px; }
 .complaintHeader { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
 .complaintTag { font-size: 12px; font-weight: 700; color: var(--indigo-600); background: #E7E9FE; padding: 3px 10px; border-radius: 20px; }
-.deleteComplaint { border: none; background: var(--red-50); color: var(--red-500); width: 26px; height: 26px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 700; transition: background 0.2s ease; }
+.deleteComplaint {
+  border: none; background: var(--red-50); color: var(--red-500); width: 36px; height: 36px; min-width: 36px;
+  border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 700; transition: background 0.2s ease;
+  display: flex; align-items: center; justify-content: center;
+}
 .deleteComplaint:hover { background: var(--red-100); }
-.addComplaintButton { width: 100%; border: 1.5px dashed var(--indigo-500); background: #EEF0FF; color: var(--indigo-600); padding: 11px; border-radius: var(--radius-sm); font-weight: 600; font-size: 13.5px; cursor: pointer; margin-bottom: 14px; transition: background 0.2s ease; }
+.addComplaintButton { width: 100%; border: 1.5px dashed var(--indigo-500); background: #EEF0FF; color: var(--indigo-600); padding: 11px; border-radius: var(--radius-sm); font-weight: 600; font-size: 13.5px; cursor: pointer; margin-bottom: 14px; min-height: 46px; transition: background 0.2s ease; }
 .addComplaintButton:hover { background: #E0E4FF; }
-.submitButton { width: 100%; border: none; background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; padding: 14px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; letter-spacing: 0.3px; cursor: pointer; box-shadow: var(--shadow-glow); transition: transform 0.15s ease, opacity 0.15s ease; }
+.submitButton { width: 100%; border: none; background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; padding: 14px; border-radius: var(--radius-sm); font-weight: 700; font-size: 14px; letter-spacing: 0.3px; cursor: pointer; min-height: 50px; box-shadow: var(--shadow-glow); transition: transform 0.15s ease, opacity 0.15s ease; }
 .submitButton:hover { transform: translateY(-1px); }
 .submitButton:disabled { opacity: 0.65; cursor: not-allowed; transform: none; }
 
@@ -230,13 +256,41 @@ textarea { resize: vertical; }
 .dotIndigo { background: var(--indigo-500); box-shadow: 0 0 8px var(--indigo-500); }
 .dashboardCard span { display: block; font-size: 11px; opacity: 0.75; }
 .dashboardCard strong { display: block; font-size: 18px; font-weight: 800; margin-top: 2px; }
-.reportCtaButton { width: 100%; border: 1.5px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.08); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; transition: background 0.2s ease, transform 0.15s ease; }
+.reportCtaButton { width: 100%; border: 1.5px solid rgba(255, 255, 255, 0.2); background: rgba(255, 255, 255, 0.08); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; min-height: 46px; transition: background 0.2s ease, transform 0.15s ease; }
 .reportCtaButton:hover { background: rgba(255, 255, 255, 0.15); transform: translateY(-1px); }
-.dashboardCtaRow { display: flex; gap: 10px; }
+.dashboardCtaRow { display: flex; gap: 10px; flex-wrap: wrap; }
+.dashboardCtaRow .reportCtaButton { flex: 1; min-width: 140px; }
 
 /* Driver's 3-tab switch (Submit / Status / Route) reuses .modeSwitch but
-   needs slightly tighter button padding to fit three labels comfortably. */
+   needs slightly tighter button padding to fit three labels comfortably
+   on narrow phones. */
 .driverTabs .modeButton { padding: 11px 4px; font-size: 12.5px; }
+
+/* ---------------- ROUTE PLANNER (responsive) ---------------- */
+/* Mobile default: Start/End stack full-width, like every other field. */
+.routeEndpoints { display: flex; flex-direction: column; }
+/* Tablet/desktop: put them side by side so the wider viewport isn't wasted
+   on a single narrow column of dropdowns. */
+@media (min-width: 700px) {
+  .routeEndpoints { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+}
+
+.routeStopRow { display: flex; gap: 10px; align-items: center; }
+.routeStopRow > select { min-width: 0; flex: 1; }
+
+/* Dedicated remove-stop control sized to the ~40-44px touch-target
+   guideline (the old shared .deleteComplaint was 26px — too small to
+   tap reliably on a phone). */
+.removeStopButton {
+  border: none; background: var(--red-50); color: var(--red-500);
+  width: 44px; height: 44px; min-width: 44px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 15px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.2s ease;
+}
+.removeStopButton:hover { background: var(--red-100); }
+.removeStopButton:active { transform: scale(0.95); }
+
 .locationCancelBtn { width: auto; height: auto; padding: 0 14px; border-radius: var(--radius-sm); font-weight: 600; font-size: 12.5px; }
 
 /* ---------------- ADMIN SECTION ---------------- */
@@ -256,14 +310,14 @@ textarea { resize: vertical; }
 .pendingBadge { background: var(--amber-50); color: var(--amber-600); }
 .completedBadge { background: var(--emerald-100); color: var(--emerald-600); }
 .adminInfoGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; margin-bottom: 12px; }
-.adminInfo { display: flex; flex-direction: column; font-size: 12.5px; }
+.adminInfo { display: flex; flex-direction: column; font-size: 12.5px; min-width: 0; }
 .adminInfo span { color: var(--slate-500); margin-bottom: 2px; }
-.adminInfo strong { color: var(--slate-900); font-weight: 600; font-size: 13.5px; }
+.adminInfo strong { color: var(--slate-900); font-weight: 600; font-size: 13.5px; overflow-wrap: break-word; }
 .daysBox { background: var(--amber-50); color: var(--amber-600); font-size: 13px; font-weight: 600; padding: 9px 12px; border-radius: var(--radius-sm); margin-bottom: 4px; }
 .daysBox.completedDays { background: var(--emerald-100); color: var(--emerald-600); }
-.completeRow { display: flex; gap: 8px; margin-top: 10px; }
-.completeRow input { flex: 1; }
-.completeButton { border: none; background: linear-gradient(135deg, var(--emerald-600), var(--emerald-500)); color: #fff; padding: 0 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; white-space: nowrap; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28); transition: transform 0.15s ease; }
+.completeRow { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+.completeRow input { flex: 1; min-width: 140px; }
+.completeButton { border: none; background: linear-gradient(135deg, var(--emerald-600), var(--emerald-500)); color: #fff; padding: 0 16px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13px; cursor: pointer; white-space: nowrap; min-height: 46px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28); transition: transform 0.15s ease; }
 .completeButton:hover { transform: translateY(-1px); }
 
 footer { text-align: center; font-size: 11.5px; color: var(--slate-500); padding: 28px 0 8px; letter-spacing: 0.2px; }
@@ -277,24 +331,25 @@ footer { text-align: center; font-size: 11.5px; color: var(--slate-500); padding
    ADMIN REPORT
 ===================================================== */
 .filterTabs { display: flex; gap: 8px; margin-bottom: 16px; }
-.filterTab { flex: 1; border: 1.5px solid var(--slate-100); background: var(--slate-50); color: var(--slate-500); padding: 9px; border-radius: var(--radius-sm); font-weight: 600; font-size: 12.5px; cursor: pointer; transition: all 0.2s ease; }
+.filterTab { flex: 1; border: 1.5px solid var(--slate-100); background: var(--slate-50); color: var(--slate-500); padding: 9px; border-radius: var(--radius-sm); font-weight: 600; font-size: 12.5px; cursor: pointer; min-height: 42px; transition: all 0.2s ease; }
 .filterTab.activeFilter { background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; border-color: transparent; }
 .reportSearchRow { margin-bottom: 14px; }
-.reportActionsRow { display: flex; gap: 10px; }
-.exportCsvButton { flex: 1; border: none; background: linear-gradient(135deg, var(--emerald-600), var(--emerald-500)); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13.5px; cursor: pointer; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28); transition: transform 0.15s ease; }
+.reportActionsRow { display: flex; gap: 10px; flex-wrap: wrap; }
+.exportCsvButton { flex: 1; min-width: 140px; border: none; background: linear-gradient(135deg, var(--emerald-600), var(--emerald-500)); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13.5px; cursor: pointer; min-height: 46px; box-shadow: 0 4px 12px rgba(16, 185, 129, 0.28); transition: transform 0.15s ease; }
 .exportCsvButton:hover { transform: translateY(-1px); }
-.printReportButton { flex: 1; border: none; background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13.5px; cursor: pointer; box-shadow: 0 4px 12px rgba(13, 20, 36, 0.25); transition: transform 0.15s ease; }
+.printReportButton { flex: 1; min-width: 140px; border: none; background: linear-gradient(135deg, var(--navy-900), var(--indigo-600)); color: #fff; padding: 12px; border-radius: var(--radius-sm); font-weight: 700; font-size: 13.5px; cursor: pointer; min-height: 46px; box-shadow: 0 4px 12px rgba(13, 20, 36, 0.25); transition: transform 0.15s ease; }
 .printReportButton:hover { transform: translateY(-1px); }
 .reportTopBar { margin-bottom: 14px; }
-.reportBackButton { border: none; background: #fff; color: var(--indigo-600); font-weight: 700; font-size: 13.5px; padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-md); cursor: pointer; transition: transform 0.15s ease, box-shadow 0.15s ease; }
+.reportBackButton { border: none; background: #fff; color: var(--indigo-600); font-weight: 700; font-size: 13.5px; padding: 10px 16px; border-radius: var(--radius-sm); box-shadow: var(--shadow-md); cursor: pointer; min-height: 44px; transition: transform 0.15s ease, box-shadow 0.15s ease; }
 .reportBackButton:hover { transform: translateY(-1px); box-shadow: var(--shadow-lg); }
 
 .reportLetterhead {
   display: flex; align-items: center; gap: 14px; background: linear-gradient(135deg, var(--navy-900) 0%, var(--navy-700) 100%);
   border-radius: var(--radius-lg); padding: 18px 20px; color: #fff; box-shadow: var(--shadow-glow); margin-bottom: 18px;
+  flex-wrap: wrap;
 }
 .reportLetterheadLogo { width: 46px; height: 46px; min-width: 46px; border-radius: 13px; object-fit: contain; background: rgba(255, 255, 255, 0.12); padding: 6px; }
-.reportLetterheadText { flex: 1; }
+.reportLetterheadText { flex: 1; min-width: 140px; }
 .reportLetterheadText h2 { margin: 0; font-size: 16px; font-weight: 800; letter-spacing: 0.5px; }
 .reportLetterheadText p { margin: 2px 0 0; font-size: 12px; opacity: 0.8; }
 .reportLetterheadMeta { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 11px; opacity: 0.85; text-align: right; white-space: nowrap; }
@@ -309,8 +364,8 @@ footer { text-align: center; font-size: 11.5px; color: var(--slate-500); padding
 .reportTable tbody tr:nth-child(even) { background: var(--slate-50); }
 .reportComplaintCell { white-space: normal; min-width: 200px; max-width: 280px; }
 
-/* Visible keyboard focus for accessibility */
-button:focus-visible, input:focus-visible, textarea:focus-visible {
+/* Visible keyboard focus for accessibility (desktop keyboard nav) */
+button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
   outline: 2px solid var(--indigo-500); outline-offset: 2px;
 }
 
