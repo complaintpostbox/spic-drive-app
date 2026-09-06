@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { supabase } from './supabaseClient';
-import spicDriveLogo from './assets/spicdrive-logo.jpg';
 import './App.css';
+
+// Logo now lives in /public (not src/assets), so it's NOT imported through
+// the bundler — anything in /public is copied as-is to the build output
+// root and served at that same root-relative path. No `import` statement
+// exists or is needed for it; the string below IS the reference.
+// If you rename the file, only this line needs to change.
+const LOGO_URL = '/spicdrive-logo.png';
 
 /* =====================================================
    HELPERS
@@ -190,7 +196,7 @@ function LoginScreen({ onLogin }) {
       <div className="loginGlow" />
       <div className="loginCard">
         <div className="loginBadge">
-          <img src={spicDriveLogo} alt="SPIC DRIVE" className="loginLogoImg" />
+          <img src={LOGO_URL} alt="SPIC DRIVE" className="loginLogoImg" />
         </div>
         <h1 className="loginBrand">SPIC DRIVE</h1>
         <p className="loginSub">Enterprise Fleet &amp; Workshop Intelligence</p>
@@ -417,7 +423,7 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
       )}
 
       <section className="reportLetterhead">
-        <img src={spicDriveLogo} alt="SPIC DRIVE" className="reportLetterheadLogo" />
+        <img src={LOGO_URL} alt="SPIC DRIVE" className="reportLetterheadLogo" />
         <div className="reportLetterheadText">
           <h2>SPIC DRIVE</h2>
           <p>Workshop Complaint Report</p>
@@ -1176,7 +1182,7 @@ function App() {
     <div className="app">
       <header className="header">
         <div className="brandRow">
-          <div className="logoBadge"><img src={spicDriveLogo} alt="SPIC DRIVE logo" className="logoImg" /></div>
+          <div className="logoBadge"><img src={LOGO_URL} alt="SPIC DRIVE logo" className="logoImg" /></div>
           <div><div className="logo">SPIC DRIVE</div><div className="headerSub">Vehicle Service System</div></div>
         </div>
         <button className="logoutButton" onClick={() => setCurrentUser(null)} title="Sign out">⏻</button>
