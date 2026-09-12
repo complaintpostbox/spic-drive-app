@@ -1,13 +1,15 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 import './App.css';
 
-// Logo now lives in /public (not src/assets), so it's NOT imported through
-// the bundler — anything in /public is copied as-is to the build output
-// root and served at that same root-relative path. No `import` statement
-// exists or is needed for it; the string below IS the reference.
-// If you rename the file, only this line needs to change.
+// Logo lives in /public, referenced by plain URL (not bundled/imported).
 const LOGO_URL = '/spicdrive-logo.png';
+
+// Session persistence key — see note #10 at the bottom of this file re:
+// why this exists (there was no session persistence at all before).
+const SESSION_KEY = 'spicdrive_current_user';
+
+const VEHICLE_LOCATION_OPTIONS = ['In Workshop', 'Running in Camp'];
 
 /* =====================================================
    HELPERS
@@ -22,7 +24,6 @@ function daysBetween(start, end) {
   const ed = new Date(e.getFullYear(), e.getMonth(), e.getDate());
   return Math.max(0, Math.floor((ed - sd) / 86400000));
 }
-// Display helper only — storage / <input type="date"> stays ISO (YYYY-MM-DD).
 function formatDMY(dateStr) {
   if (!dateStr) return null;
   const parts = dateStr.split('-');
@@ -30,22 +31,27 @@ function formatDMY(dateStr) {
   const [y, m, d] = parts;
   return `${d}-${m}-${y}`;
 }
-// Build fast id -> record lookups once per fetch instead of repeated
-// Array#find calls (O(n) each) scattered through render.
 function toMap(rows) {
   const m = new Map();
   (rows || []).forEach((r) => m.set(r.id, r));
   return m;
 }
 
-// Locations are fetched independently of the complaints data (only when the
-// Route Planner or Manage Locations screens actually mount) so they never
-// add weight to the driver/admin complaint flows.
-//
-// Ordered by `sort_order` (the admin-controlled display/route order), with
-// `name` as a tiebreaker. If `sort_order` doesn't exist yet in an older
-// database (pre-migration), PostgREST errors on the .order() call itself —
-// so this falls back to ordering by name alone rather than failing outright.
+function loadStoredUser() {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (e) {
+    return null;
+  }
+}
+function storeUser(user) {
+  try {
+    if (user) localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+    else localStorage.removeItem(SESSION_KEY);
+  } catch (e) { /* storage unavailable (private mode etc.) — session just won't persist */ }
+}
+
 async function fetchLocationsData() {
   const primary = await supabase.from('locations').select('*')
     .order('sort_order', { ascending: true, nullsFirst: false })
@@ -53,24 +59,16 @@ async function fetchLocationsData() {
 
   if (!primary.error) return { data: primary.data || [], error: null, needsSortOrderColumn: false };
 
-  // Column doesn't exist yet — caller shows a one-time setup hint.
   const fallback = await supabase.from('locations').select('*').order('name', { ascending: true });
   return { data: fallback.data || [], error: fallback.error, needsSortOrderColumn: true };
 }
 
-// Recognizes "lat,lng" (any spacing around the comma); returns null for
-// free-text place names/addresses, which OSRM (used for the route-distance
-// summary below) can't route between without a geocoding step we don't have.
 function parseLatLng(location) {
   const raw = ((location.address || location.name || '') + '').replace(/\s+/g, ' ').trim();
   const m = raw.match(/^(-?\d{1,3}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
   return m ? { lat: parseFloat(m[1]), lng: parseFloat(m[2]) } : null;
 }
 
-// Builds a wa.me share link — opens WhatsApp's chooser (no fixed recipient)
-// with the location's name, address/coordinates, and a tappable Google Maps
-// link pre-filled, so a driver or admin can share it with whoever asks in
-// two taps: tap Share, pick the contact/group in WhatsApp.
 function buildWhatsAppShareUrl(location) {
   const point = formatMapPoint(location);
   const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(point)}`;
@@ -80,14 +78,26 @@ function buildWhatsAppShareUrl(location) {
   return `https://wa.me/?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
+// Straight-line (haversine) distance in km — used ONLY as a fallback when
+// the OSRM routing service can't be reached (see fetchRouteSummary below).
+function haversineKm(a, b) {
+  const R = 6371;
+  const dLat = (b.lat - a.lat) * Math.PI / 180;
+  const dLng = (b.lng - a.lng) * Math.PI / 180;
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a.lat * Math.PI / 180) * Math.cos(b.lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
 // Queries the free, keyless OSRM public routing server for the ordered
-// sequence of points (origin, ...stops, destination) and returns per-leg +
-// total distance/duration. OSRM needs actual coordinates for every point —
-// it does no geocoding — so any location saved as free-text address/name
-// (no "lat,lng") is reported back as missing rather than silently skipped.
-// The public demo server has no uptime/rate-limit guarantee; for heavier
-// production use, self-host OSRM or switch to a paid provider (e.g. Google
-// Distance Matrix, which also geocodes text addresses).
+// sequence of points. Some office/corporate networks block or proxy-filter
+// arbitrary external domains like router.project-osrm.org (this is a
+// network/firewall policy, not something fixable from inside the app) —
+// so on ANY fetch failure (blocked, timed out, CORS, offline) this now
+// falls back to a straight-line (haversine) distance + a conservative
+// average-speed time estimate, clearly labeled as an estimate, instead of
+// just failing. Real road-network distance is used whenever OSRM IS
+// reachable; the estimate only kicks in when it isn't.
 async function fetchRouteSummary(points) {
   const missing = points.filter((p) => !parseLatLng(p));
   if (missing.length) {
@@ -97,38 +107,39 @@ async function fetchRouteSummary(points) {
   const coordsStr = points.map((p) => { const c = parseLatLng(p); return `${c.lng},${c.lat}`; }).join(';');
   const url = `https://router.project-osrm.org/route/v1/driving/${coordsStr}?overview=false&steps=false`;
 
-  let json;
   try {
-    const res = await fetch(url);
-    json = await res.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timeout);
+    const json = await res.json();
+
+    if (json.code === 'Ok' && json.routes && json.routes[0]) {
+      const route = json.routes[0];
+      const legs = route.legs.map((leg, i) => ({
+        from: points[i].name, to: points[i + 1].name,
+        km: leg.distance / 1000, min: leg.duration / 60,
+      }));
+      return { legs, totalKm: route.distance / 1000, totalMin: route.duration / 60, estimated: false };
+    }
   } catch (e) {
-    return { error: 'Could not reach the routing service. Check your connection and try again.' };
+    // fall through to the estimate below — network blocked, timed out, or CORS
   }
 
-  if (json.code !== 'Ok' || !json.routes || !json.routes[0]) {
-    return { error: 'Routing service could not calculate a route between these points.' };
+  // Fallback: straight-line distance, ~40 km/h assumed average (industrial
+  // site / camp roads) — clearly flagged as an estimate in the UI.
+  const AVG_SPEED_KMH = 40;
+  const coords = points.map(parseLatLng);
+  const legs = [];
+  let totalKm = 0;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const km = haversineKm(coords[i], coords[i + 1]);
+    totalKm += km;
+    legs.push({ from: points[i].name, to: points[i + 1].name, km, min: (km / AVG_SPEED_KMH) * 60 });
   }
-
-  const route = json.routes[0];
-  const legs = route.legs.map((leg, i) => ({
-    from: points[i].name,
-    to: points[i + 1].name,
-    km: leg.distance / 1000,
-    min: leg.duration / 60,
-  }));
-
-  return { legs, totalKm: route.distance / 1000, totalMin: route.duration / 60 };
+  return { legs, totalKm, totalMin: (totalKm / AVG_SPEED_KMH) * 60, estimated: true };
 }
 
-// Builds a Google Maps multi-stop directions URL. Distance and travel time
-// are computed by Google Maps itself once the link opens — no separate
-// Distance Matrix call needed.
-//
-// formatMapPoint recognizes "lat,lng" (any spacing around the comma) and
-// passes coordinate pairs through cleanly; otherwise it treats the value as
-// a free-text place name/address (e.g. `KNPC - 54`, `MHC "F" Camp`),
-// collapsing stray whitespace so admin-entered names stay well-formed as
-// the list of stations grows.
 function formatMapPoint(location) {
   const source = (location.address && location.address.trim()) || (location.name && location.name.trim()) || '';
   const raw = source.replace(/\s+/g, ' ').trim();
@@ -136,13 +147,6 @@ function formatMapPoint(location) {
   return coordMatch ? `${coordMatch[1]},${coordMatch[2]}` : raw;
 }
 
-// Each point is percent-encoded on its own with encodeURIComponent (so
-// commas in coordinates, quotes/hyphens/ampersands in names, etc. are all
-// handled correctly) — but unlike URLSearchParams, the "|" that separates
-// waypoints is left as a literal character rather than re-encoded to
-// "%7C". Google Maps' web client tolerates either, but its mobile-app
-// deep-link handler expects a raw "|" and doesn't reliably split on
-// "%7C", which is what was silently breaking multi-stop links on phones.
 function buildGoogleMapsUrl(origin, destination, waypoints) {
   const originStr = encodeURIComponent(formatMapPoint(origin));
   const destinationStr = encodeURIComponent(formatMapPoint(destination));
@@ -155,11 +159,6 @@ function buildGoogleMapsUrl(origin, destination, waypoints) {
 
 /* =====================================================
    LOGIN SCREEN
-   Expects a `users` table in Supabase: id, username, password,
-   role ('admin' | 'driver'), name, gs_no (nullable, for drivers).
-   ⚠ See the migration notes at the bottom of this file re:
-   moving password checks server-side (Supabase Auth) before
-   going to production with real users.
 ===================================================== */
 function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState('');
@@ -169,25 +168,15 @@ function LoginScreen({ onLogin }) {
 
   async function submit(e) {
     e.preventDefault();
-    if (!username.trim() || !password) {
-      setError('Enter both username and password.');
-      return;
-    }
-    setLoading(true);
-    setError('');
+    if (!username.trim() || !password) { setError('Enter both username and password.'); return; }
+    setLoading(true); setError('');
 
     const { data, error: err } = await supabase
-      .from('users')
-      .select('*')
-      .eq('username', username.trim())
-      .eq('password', password)
-      .maybeSingle();
+      .from('users').select('*').eq('username', username.trim()).eq('password', password).maybeSingle();
 
     setLoading(false);
-
     if (err) { setError(err.message); return; }
     if (!data) { setError('Incorrect username or password.'); return; }
-
     onLogin(data);
   }
 
@@ -195,9 +184,7 @@ function LoginScreen({ onLogin }) {
     <div className="loginWrap">
       <div className="loginGlow" />
       <div className="loginCard">
-        <div className="loginBadge">
-          <img src={LOGO_URL} alt="SPIC DRIVE" className="loginLogoImg" />
-        </div>
+        <div className="loginBadge"><img src={LOGO_URL} alt="SPIC DRIVE" className="loginLogoImg" /></div>
         <h1 className="loginBrand">SPIC DRIVE</h1>
         <p className="loginSub">Enterprise Fleet &amp; Workshop Intelligence</p>
 
@@ -206,14 +193,11 @@ function LoginScreen({ onLogin }) {
           <div className="loginInputRow">
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter username" autoComplete="username" />
           </div>
-
           <label className="loginLabel">Password</label>
           <div className="loginInputRow">
             <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" />
           </div>
-
           {error && <div className="loginError">⚠ {error}</div>}
-
           <button className="loginButton" type="submit" disabled={loading}>
             {loading ? <span className="spinner light" /> : 'Sign In'}
           </button>
@@ -224,11 +208,89 @@ function LoginScreen({ onLogin }) {
 }
 
 /* =====================================================
+   CHANGE PASSWORD (any logged-in user)
+===================================================== */
+function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newUsername, setNewUsername] = useState(currentUser.username);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const [isError, setIsError] = useState(false);
+
+  async function save() {
+    setMessage(''); setIsError(false);
+    if (!currentPassword) { setIsError(true); setMessage('Enter your current password.'); return; }
+    if (!newUsername.trim()) { setIsError(true); setMessage('Username cannot be empty.'); return; }
+    if (newPassword && newPassword !== confirmPassword) { setIsError(true); setMessage('New passwords do not match.'); return; }
+
+    setSaving(true);
+    // Re-check against the live row, not the in-memory copy, in case it
+    // changed since login (e.g. an admin reset it).
+    const { data: fresh, error: fetchErr } = await supabase.from('users').select('*').eq('id', currentUser.id).maybeSingle();
+    if (fetchErr || !fresh) { setSaving(false); setIsError(true); setMessage('Could not verify your account.'); return; }
+    if (fresh.password !== currentPassword) { setSaving(false); setIsError(true); setMessage('Current password is incorrect.'); return; }
+
+    const patch = { username: newUsername.trim() };
+    if (newPassword) patch.password = newPassword;
+
+    const { data: updated, error } = await supabase.from('users').update(patch).eq('id', currentUser.id).select().maybeSingle();
+    setSaving(false);
+    if (error) {
+      setIsError(true);
+      setMessage(error.message.includes('duplicate') ? 'That username is already taken.' : 'Update failed: ' + error.message);
+      return;
+    }
+    setIsError(false);
+    setMessage('✓ Saved. Use your new credentials next time you sign in.');
+    setCurrentPassword(''); setNewPassword(''); setConfirmPassword('');
+    onUpdated?.(updated);
+  }
+
+  return (
+    <section className="card">
+      <div className="sectionTitle">
+        <span className="iconCircle iconIndigo">🔑</span>
+        <div><h2>Change Username / Password</h2><p>Update your own sign-in credentials</p></div>
+      </div>
+
+      <div className="dateField">
+        <label className="fieldLabel">Current Password</label>
+        <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Required to confirm it's you" />
+      </div>
+      <div className="dateField">
+        <label className="fieldLabel">Username</label>
+        <input value={newUsername} onChange={(e) => setNewUsername(e.target.value)} />
+      </div>
+      <div className="dateField">
+        <label className="fieldLabel">New Password (leave blank to keep current)</label>
+        <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+      </div>
+      {newPassword && (
+        <div className="dateField">
+          <label className="fieldLabel">Confirm New Password</label>
+          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+        </div>
+      )}
+
+      {message && <div className={isError ? 'errorMessage' : 'saveMessage'}>{isError ? '⚠ ' : ''}{message}</div>}
+
+      <div className="completeRow">
+        <button className="submitButton" onClick={save} disabled={saving} style={{ flex: 1 }}>
+          {saving ? <span className="spinner light" /> : 'Save Changes'}
+        </button>
+        <button className="deleteComplaint locationCancelBtn" onClick={onClose}>Close</button>
+      </div>
+    </section>
+  );
+}
+
+/* =====================================================
    SUBMIT COMPLAINT PANEL
-   GS No lookup -> vehicle lookup -> multi-complaint submit.
-   Used both for real drivers and for an admin previewing the
-   driver flow. No "My Complaints" list here anymore — that's
-   what the Report tab is for (avoids a duplicate query).
+   Complaint Date + Vehicle Location moved above the complaint list
+   itself (item #2), so the "when/where" context is filled in before
+   describing the problem, not after.
 ===================================================== */
 function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   const [gsNo, setGsNo] = useState(currentUser.role === 'driver' ? (currentUser.gs_no || '') : '');
@@ -241,8 +303,9 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   const [vehicleMessage, setVehicleMessage] = useState('');
   const [vehicleLoading, setVehicleLoading] = useState(false);
 
-  const [complaints, setComplaints] = useState(['']);
   const [complaintDate, setComplaintDate] = useState(getTodayString());
+  const [vehicleLocation, setVehicleLocation] = useState(VEHICLE_LOCATION_OPTIONS[0]);
+  const [complaints, setComplaints] = useState(['']);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
 
@@ -289,6 +352,7 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
     const records = valid.map((text) => ({
       employee_id: employee.id, vehicle_id: vehicle.id,
       complaint_text: text, complaint_date: complaintDate, status: 'Pending',
+      vehicle_location: vehicleLocation,
     }));
     const { error } = await supabase.from('complaint_records').insert(records);
     setSaving(false);
@@ -352,6 +416,18 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
           <span className="iconCircle iconAmber">🔧</span>
           <div><h2>Workshop Complaint</h2><p>Add one or more vehicle problems</p></div>
         </div>
+
+        <div className="dateField">
+          <label className="fieldLabel" htmlFor="complaintDate">Complaint Date</label>
+          <input id="complaintDate" type="date" value={complaintDate} max={getTodayString()} onChange={(e) => setComplaintDate(e.target.value)} />
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Vehicle Location</label>
+          <select value={vehicleLocation} onChange={(e) => setVehicleLocation(e.target.value)}>
+            {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+        </div>
+
         {complaints.map((complaint, index) => (
           <div className="complaintItem" key={index}>
             <div className="complaintHeader">
@@ -361,10 +437,7 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
             <textarea value={complaint} onChange={(e) => updateComplaint(index, e.target.value)} placeholder="Type your problem here..." rows="3" />
           </div>
         ))}
-        <div className="dateField">
-          <label className="fieldLabel" htmlFor="complaintDate">Complaint Date</label>
-          <input id="complaintDate" type="date" value={complaintDate} max={getTodayString()} onChange={(e) => setComplaintDate(e.target.value)} />
-        </div>
+
         <button className="addComplaintButton" onClick={addComplaint}>＋ Add Another Complaint</button>
         <button className="submitButton" onClick={submitComplaints} disabled={saving}>
           {saving ? <span className="spinner light" /> : 'SUBMIT COMPLAINT'}
@@ -377,11 +450,17 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
 
 /* =====================================================
    REPORT VIEW (read-only)
-   Letterhead + filter tabs + plate/asset search + CSV export
-   + print. Used by drivers (always) and by admins (via "Open
-   Full Report"). Never shows any admin action controls.
+   Column order per spec: # · Vehicle · Driver (GS No first) · Complaint ·
+   Vehicle Location · Complaint Date · Completed Date · Status · Days ·
+   Remarks. Used by drivers (always, read-only) and admins ("Open Full
+   Report", read-only there too — editing lives only in AdminDashboard).
 ===================================================== */
 const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
+
+function driverLabel(c) {
+  if (!c.employees?.name) return '-';
+  return c.employees.gs_no ? `${c.employees.gs_no} ${c.employees.name}` : c.employees.name;
+}
 
 function ReportView({ complaints, loading, message, onBack, showBack }) {
   const [filter, setFilter] = useState('all');
@@ -399,12 +478,13 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
   }, [complaints, filter, q]);
 
   function exportCsv() {
-    const header = ['S.No', 'Vehicle', 'Asset No', 'Driver', 'GS No', 'Complaint', 'Complaint Date', 'Completed Date', 'Status', 'Days'];
+    const header = ['#', 'Vehicle', 'Driver', 'Complaint', 'Vehicle Location', 'Complaint Date', 'Completed Date', 'Status', 'Days', 'Remarks'];
     const lines = rows.map((c, i) => [
-      i + 1, c.vehicles?.plate_no || '-', c.vehicles?.asset_no || '-', c.employees?.name || '-',
-      c.employees?.gs_no || '-',
-      `"${(c.complaint_text || '').replace(/"/g, '""')}"`, formatDMY(c.complaint_date) || '-', formatDMY(c.completed_date) || '-',
+      i + 1, c.vehicles?.plate_no || '-', driverLabel(c),
+      `"${(c.complaint_text || '').replace(/"/g, '""')}"`,
+      c.vehicle_location || '-', formatDMY(c.complaint_date) || '-', formatDMY(c.completed_date) || '-',
       c.status, daysBetween(c.complaint_date, c.completed_date),
+      `"${(c.remarks || '').replace(/"/g, '""')}"`,
     ].join(','));
     const csv = [header.join(','), ...lines].join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -458,23 +538,28 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
         <div className="reportTableWrapper">
           <table className="reportTable">
             <thead>
-              <tr><th>#</th><th>Vehicle</th><th>Driver (GS No)</th><th className="reportComplaintCell">Complaint</th><th>Complaint Date</th><th>Completed</th><th>Status</th><th>Days</th></tr>
+              <tr>
+                <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
+                <th>Vehicle Location</th><th>Complaint Date</th><th>Completed Date</th><th>Status</th><th>Days</th><th>Remarks</th>
+              </tr>
             </thead>
             <tbody>
               {rows.map((c, i) => (
                 <tr key={c.id}>
                   <td>{i + 1}</td>
                   <td>{c.vehicles?.plate_no || '-'}</td>
-                  <td>{c.employees?.name ? `${c.employees.name}${c.employees.gs_no ? ` (${c.employees.gs_no})` : ''}` : '-'}</td>
+                  <td>{driverLabel(c)}</td>
                   <td className="reportComplaintCell">{c.complaint_text}</td>
+                  <td>{c.vehicle_location || '-'}</td>
                   <td>{formatDMY(c.complaint_date) || '-'}</td>
                   <td>{formatDMY(c.completed_date) || '—'}</td>
                   <td><span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span></td>
                   <td>{daysBetween(c.complaint_date, c.completed_date)}</td>
+                  <td className="reportComplaintCell">{c.remarks || '-'}</td>
                 </tr>
               ))}
               {!loading && rows.length === 0 && (
-                <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>No matching records</td></tr>
+                <tr><td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>No matching records</td></tr>
               )}
             </tbody>
           </table>
@@ -485,39 +570,7 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
 }
 
 /* =====================================================
-   ROUTE PLANNER (driver-only tab)
-   Start point -> N dynamic stops -> end point, then hands the
-   ordered waypoints straight to Google Maps, which computes the
-   route, total distance, and travel time itself. Locations are
-   fetched only when this tab mounts, so it never touches the
-   complaints data path or slows the other tabs.
-
-   FIXES/FEATURES:
-   1. ID lookup bug — <select> values from e.target.value are
-      ALWAYS strings, but Supabase's `id` column comes back as a
-      number. locationsById is keyed by String(l.id) so it matches
-      the string startId/endId/stopIds coming out of the dropdowns.
-   2. Desktop layout — Starting Point / End Point sit in a
-      2-column grid (.routeEndpoints) on wider screens.
-   3. Touch target — the per-stop remove button uses
-      .removeStopButton (44px) instead of the old 26px shared one.
-   4. Quick Share — search any saved location and share it to
-      WhatsApp in one tap, without building a full route.
-   5. Route Summary — a separate button that calls the free OSRM
-      routing service for a leg-by-leg + total distance/time
-      breakdown before committing to "Open in Google Maps". Only
-      works for locations saved with "lat,lng" coordinates (OSRM
-      doesn't geocode text addresses) — locations missing
-      coordinates are named explicitly rather than silently
-      skipped.
-===================================================== */
-/* =====================================================
-   SEARCHABLE LOCATION PICKER
-   Drop-in replacement for a plain <select> of locations — with 40-50+
-   saved stations, scrolling a native dropdown to find one is painful,
-   especially on mobile. Collapsed, it shows the current selection like a
-   normal field; tapping it opens a text search + filtered, scrollable
-   list. Selecting an option (or the ✕ clear) collapses it again.
+   SEARCHABLE LOCATION PICKER (unchanged)
 ===================================================== */
 function LocationPicker({ locations, valueId, onSelect, placeholder }) {
   const [editing, setEditing] = useState(false);
@@ -532,15 +585,8 @@ function LocationPicker({ locations, valueId, onSelect, placeholder }) {
       l.name.toLowerCase().includes(s) || (l.address || '').toLowerCase().includes(s));
   }, [locations, query]);
 
-  function pick(id) {
-    onSelect(String(id));
-    setEditing(false);
-    setQuery('');
-  }
-  function clear(e) {
-    e.stopPropagation();
-    onSelect('');
-  }
+  function pick(id) { onSelect(String(id)); setEditing(false); setQuery(''); }
+  function clear(e) { e.stopPropagation(); onSelect(''); }
 
   if (!editing) {
     return (
@@ -559,20 +605,14 @@ function LocationPicker({ locations, valueId, onSelect, placeholder }) {
   return (
     <div className="locationPickerOpen">
       <div className="locationPickerSearchRow">
-        <input
-          autoFocus
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Type to search locations..."
-        />
+        <input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Type to search locations..." />
         <button type="button" className="locationPickerCancel" onClick={() => { setEditing(false); setQuery(''); }}>Cancel</button>
       </div>
       <div className="locationPickerList">
         {results.length === 0 && <div className="emptyState">No matching locations</div>}
         {results.map((l) => (
           <button
-            type="button"
-            key={l.id}
+            type="button" key={l.id}
             className={String(l.id) === String(valueId) ? 'locationPickerOption locationPickerOptionActive' : 'locationPickerOption'}
             onClick={() => pick(l.id)}
           >
@@ -585,6 +625,13 @@ function LocationPicker({ locations, valueId, onSelect, placeholder }) {
   );
 }
 
+/* =====================================================
+   QUICK SHARE (WhatsApp)
+   Item #5: shows ONLY the clean location name in the list — no raw
+   lat,lng (or address) line underneath. The share message itself still
+   includes the address/coordinates (that's useful context for whoever
+   receives it on WhatsApp); it's just not shown in this on-screen list.
+===================================================== */
 function QuickShareLocations({ locations }) {
   const [q, setQ] = useState('');
 
@@ -608,10 +655,7 @@ function QuickShareLocations({ locations }) {
         {results.length === 0 && <div className="emptyState">No matching locations</div>}
         {results.slice(0, 8).map((l) => (
           <div className="quickShareRow" key={l.id}>
-            <div className="quickShareInfo">
-              <strong>{l.name}</strong>
-              {l.address && <span>{l.address}</span>}
-            </div>
+            <div className="quickShareInfo"><strong>{l.name}</strong></div>
             <a className="whatsappShareButton" href={buildWhatsAppShareUrl(l)} target="_blank" rel="noopener noreferrer">💬 Share</a>
           </div>
         ))}
@@ -621,6 +665,10 @@ function QuickShareLocations({ locations }) {
   );
 }
 
+/* =====================================================
+   ROUTE PLANNER (driver-only tab)
+   Item #4: Route Planner card renders first, Quick Share second.
+===================================================== */
 function RoutePlanner() {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -646,8 +694,6 @@ function RoutePlanner() {
     return () => { active = false; };
   }, []);
 
-  // Keyed by String(id) to match the string values <select> always
-  // produces via e.target.value — this is the fix for the lookup mismatch.
   const locationsById = useMemo(() => {
     const m = new Map();
     locations.forEach((l) => m.set(String(l.id), l));
@@ -657,9 +703,6 @@ function RoutePlanner() {
   function addStop() { setStopIds((s) => [...s, '']); }
   function updateStop(i, v) { setStopIds((s) => s.map((x, idx) => (idx === i ? v : x))); }
   function removeStop(i) { setStopIds((s) => s.filter((_, idx) => idx !== i)); }
-
-  // Any change to the route invalidates a previously-calculated summary —
-  // it would otherwise silently describe a route the driver has since edited.
   function invalidateSummary() { setSummary(null); setSummaryMessage(''); }
 
   const canOpen = Boolean(startId && endId);
@@ -673,16 +716,9 @@ function RoutePlanner() {
 
   async function calculateSummary() {
     const { origin, destination, waypoints } = orderedPoints();
-    if (!origin || !destination) {
-      setSummaryMessage('Select a start and end point first.');
-      return;
-    }
-    setSummaryLoading(true);
-    setSummaryMessage('');
-    setSummary(null);
-
+    if (!origin || !destination) { setSummaryMessage('Select a start and end point first.'); return; }
+    setSummaryLoading(true); setSummaryMessage(''); setSummary(null);
     const result = await fetchRouteSummary([origin, ...waypoints, destination]);
-
     setSummaryLoading(false);
     if (result.error) { setSummaryMessage(result.error); return; }
     setSummary(result);
@@ -690,22 +726,14 @@ function RoutePlanner() {
 
   function openInGoogleMaps() {
     const { origin, destination, waypoints } = orderedPoints();
-    if (!origin || !destination) {
-      setMessage('Could not match the selected start/end location — please re-select them and try again.');
-      return;
-    }
-    if (!formatMapPoint(origin) || !formatMapPoint(destination)) {
-      setMessage('The selected start or end location has no name or address saved — edit it in Manage Locations first.');
-      return;
-    }
+    if (!origin || !destination) { setMessage('Could not match the selected start/end location — please re-select them and try again.'); return; }
+    if (!formatMapPoint(origin) || !formatMapPoint(destination)) { setMessage('The selected start or end location has no name or address saved — edit it in Manage Locations first.'); return; }
     setMessage('');
     window.open(buildGoogleMapsUrl(origin, destination, waypoints), '_blank', 'noopener,noreferrer');
   }
 
   return (
     <>
-      {!loading && locations.length > 0 && <QuickShareLocations locations={locations} />}
-
       <section className="card">
         <div className="sectionTitle">
           <span className="iconCircle iconIndigo">🗺️</span>
@@ -714,7 +742,6 @@ function RoutePlanner() {
 
         {loading && <p className="loadingText">Loading locations...</p>}
         {message && <div className="errorMessage">⚠ {message}</div>}
-
         {!loading && locations.length === 0 && !message && (
           <div className="emptyState">No saved locations yet — ask an admin to add some in Manage Locations.</div>
         )}
@@ -724,22 +751,11 @@ function RoutePlanner() {
             <div className="routeEndpoints">
               <div className="dateField">
                 <label className="fieldLabel">Starting Point</label>
-                <LocationPicker
-                  locations={locations}
-                  valueId={startId}
-                  onSelect={(id) => { setStartId(id); invalidateSummary(); }}
-                  placeholder="Select starting location"
-                />
+                <LocationPicker locations={locations} valueId={startId} onSelect={(id) => { setStartId(id); invalidateSummary(); }} placeholder="Select starting location" />
               </div>
-
               <div className="dateField">
                 <label className="fieldLabel">End Point</label>
-                <LocationPicker
-                  locations={locations}
-                  valueId={endId}
-                  onSelect={(id) => { setEndId(id); invalidateSummary(); }}
-                  placeholder="Select destination"
-                />
+                <LocationPicker locations={locations} valueId={endId} onSelect={(id) => { setEndId(id); invalidateSummary(); }} placeholder="Select destination" />
               </div>
             </div>
 
@@ -748,12 +764,7 @@ function RoutePlanner() {
                 <label className="fieldLabel">Point {i + 1}</label>
                 <div className="routeStopRow">
                   <div className="routeStopPicker">
-                    <LocationPicker
-                      locations={locations}
-                      valueId={id}
-                      onSelect={(newId) => { updateStop(i, newId); invalidateSummary(); }}
-                      placeholder="Select stop"
-                    />
+                    <LocationPicker locations={locations} valueId={id} onSelect={(newId) => { updateStop(i, newId); invalidateSummary(); }} placeholder="Select stop" />
                   </div>
                   <button className="removeStopButton" onClick={() => { removeStop(i); invalidateSummary(); }} aria-label={`Remove point ${i + 1}`}>✕</button>
                 </div>
@@ -761,9 +772,7 @@ function RoutePlanner() {
             ))}
 
             <button className="addComplaintButton" onClick={() => { addStop(); invalidateSummary(); }}>＋ Add Point</button>
-            {stopIds.length > 8 && (
-              <div className="errorMessage">⚠ Google Maps supports up to 9 stops — consider splitting long routes.</div>
-            )}
+            {stopIds.length > 8 && <div className="errorMessage">⚠ Google Maps supports up to 9 stops — consider splitting long routes.</div>}
 
             <button className="btnPrimary routeSummaryButton" onClick={calculateSummary} disabled={!canOpen || summaryLoading}>
               {summaryLoading ? <span className="spinner" /> : '📊 Calculate Distance & Time'}
@@ -772,6 +781,11 @@ function RoutePlanner() {
 
             {summary && (
               <div className="routeSummaryBox fadeIn">
+                {summary.estimated && (
+                  <div className="routeSummaryEstimateNote">
+                    ⓘ Routing service unreachable on this network — showing an estimated straight-line distance instead of the actual road route.
+                  </div>
+                )}
                 {summary.legs.map((leg, i) => (
                   <div className="routeSummaryLeg" key={i}>
                     <span className="routeSummaryLegNames">{leg.from} → {leg.to}</span>
@@ -779,29 +793,26 @@ function RoutePlanner() {
                   </div>
                 ))}
                 <div className="routeSummaryTotal">
-                  <span>Total</span>
+                  <span>Total{summary.estimated ? ' (est.)' : ''}</span>
                   <span>{summary.totalKm.toFixed(1)} km · {Math.round(summary.totalMin)} min</span>
                 </div>
               </div>
             )}
 
-            <button className="submitButton" onClick={openInGoogleMaps} disabled={!canOpen}>
-              🗺 Open Route in Google Maps
-            </button>
-            <p className="loadingText">Distance &amp; travel time above come from a free routing service — Google Maps recalculates them itself once opened.</p>
+            <button className="submitButton" onClick={openInGoogleMaps} disabled={!canOpen}>🗺 Open Route in Google Maps</button>
+            <p className="loadingText">Distance &amp; travel time above are a planning estimate — Google Maps recalculates them itself once opened.</p>
           </>
         )}
       </section>
+
+      {!loading && locations.length > 0 && <QuickShareLocations locations={locations} />}
     </>
   );
 }
 
 /* =====================================================
    DRIVER EXPERIENCE
-   Three lightweight tabs: Submit Complaint / Complaint Status /
-   Route Planner. Only the active tab's component is mounted, so
-   each one's data loads independently and on demand. Used for
-   real drivers, and for an admin previewing driver mode.
+   Item #3: renamed tab labels. Item #4 handled inside RoutePlanner.
 ===================================================== */
 function DriverExperience({ currentUser, complaints, complaintsLoading, complaintsMessage, onRefresh }) {
   const [tab, setTab] = useState('submit');
@@ -809,23 +820,90 @@ function DriverExperience({ currentUser, complaints, complaintsLoading, complain
   return (
     <>
       <div className="modeSwitch driverTabs">
-        <button className={tab === 'submit' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('submit')}>📝 Submit</button>
-        <button className={tab === 'report' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('report')}>📋 Status</button>
-        <button className={tab === 'route' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('route')}>🗺️ Route</button>
+        <button className={tab === 'submit' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('submit')}>📝 Submit Complaint</button>
+        <button className={tab === 'report' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('report')}>📋 Complaint Status</button>
+        <button className={tab === 'route' ? 'modeButton activeMode' : 'modeButton'} onClick={() => setTab('route')}>🗺️ Route Map</button>
       </div>
       {tab === 'submit' && <SubmitComplaintPanel currentUser={currentUser} onSubmitted={onRefresh} />}
-      {tab === 'report' && (
-        <ReportView complaints={complaints} loading={complaintsLoading} message={complaintsMessage} showBack={false} />
-      )}
+      {tab === 'report' && <ReportView complaints={complaints} loading={complaintsLoading} message={complaintsMessage} showBack={false} />}
       {tab === 'route' && <RoutePlanner />}
     </>
   );
 }
 
 /* =====================================================
+   DRAGGABLE LIST (Pointer Events — mouse + touch, no library)
+   Generic reorder wrapper: caller supplies the row content via
+   renderRow(item, index, dragHandleProps); this component only owns the
+   drag mechanics and calls onReordered(newOrderOfIds) once, on release.
+===================================================== */
+function DraggableList({ items, getId, onReordered, disabled, renderRow }) {
+  const [order, setOrder] = useState(items.map(getId));
+  const [draggingId, setDraggingId] = useState(null);
+  const orderRef = useRef(order);
+  orderRef.current = order;
+
+  useEffect(() => { setOrder(items.map(getId)); }, [items, getId]);
+
+  const byId = useMemo(() => {
+    const m = new Map();
+    items.forEach((it) => m.set(getId(it), it));
+    return m;
+  }, [items, getId]);
+
+  const ordered = order.map((id) => byId.get(id)).filter(Boolean);
+
+  function handlePointerDown(e, id) {
+    if (disabled) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    setDraggingId(id);
+  }
+  function handlePointerMove(e) {
+    if (draggingId == null) return;
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const rowEl = el && el.closest('[data-drag-row]');
+    if (!rowEl) return;
+    const overId = rowEl.getAttribute('data-drag-row');
+    if (!overId || overId === String(draggingId)) return;
+    const prev = orderRef.current;
+    const from = prev.findIndex((x) => String(x) === String(draggingId));
+    const to = prev.findIndex((x) => String(x) === overId);
+    if (from === -1 || to === -1 || from === to) return;
+    const next = prev.slice();
+    next.splice(from, 1);
+    next.splice(to, 0, draggingId);
+    setOrder(next);
+  }
+  function handlePointerUp() {
+    if (draggingId == null) return;
+    setDraggingId(null);
+    onReordered(orderRef.current);
+  }
+
+  return (
+    <div className="dragList">
+      {ordered.map((item, index) => {
+        const id = getId(item);
+        return (
+          <div key={id} data-drag-row={id} className={String(draggingId) === String(id) ? 'dragRow dragRowActive' : 'dragRow'}>
+            {renderRow(item, index, {
+              onPointerDown: (e) => handlePointerDown(e, id),
+              onPointerMove: handlePointerMove,
+              onPointerUp: handlePointerUp,
+              onPointerCancel: handlePointerUp,
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* =====================================================
    MANAGE LOCATIONS (admin-only)
-   Simple CRUD over a `locations` table (name + address/lat,lng)
-   that feeds the driver Route Planner's dropdowns.
+   Item #11: ▲▼ buttons replaced with a drag handle (⠿) using
+   DraggableList above — works with mouse drag on desktop and touch drag
+   on mobile via the same Pointer Events, no extra library.
 ===================================================== */
 function LocationManager({ onBack }) {
   const [locations, setLocations] = useState([]);
@@ -849,11 +927,6 @@ function LocationManager({ onBack }) {
     setNeedsMigration(Boolean(needsSortOrderColumn));
     if (error) { setMessage('Load failed: ' + error.message); setLoading(false); return; }
 
-    // Self-healing backfill: rows saved before the sort_order column existed
-    // (or before ordering was ever set) come back with sort_order === null.
-    // Assign them sequential values from their current (name-sorted) order
-    // so reordering has something sensible to start from, without requiring
-    // a manual migration step beyond adding the column itself.
     if (!needsSortOrderColumn && data.some((l) => l.sort_order === null || l.sort_order === undefined)) {
       const updates = data.map((l, i) => ({ id: l.id, sort_order: l.sort_order ?? i }));
       await Promise.all(updates.map((u) => supabase.from('locations').update({ sort_order: u.sort_order }).eq('id', u.id)));
@@ -862,7 +935,6 @@ function LocationManager({ onBack }) {
       setLoading(false);
       return;
     }
-
     setLocations(data);
     setLoading(false);
   }, []);
@@ -872,9 +944,7 @@ function LocationManager({ onBack }) {
   async function addLocation() {
     if (!name.trim()) { setMessage('Enter a location name.'); return; }
     setSaving(true);
-    const nextOrder = locations.length
-      ? Math.max(...locations.map((l) => l.sort_order ?? 0)) + 1
-      : 0;
+    const nextOrder = locations.length ? Math.max(...locations.map((l) => l.sort_order ?? 0)) + 1 : 0;
     const payload = { name: name.trim(), address: address.trim() || null };
     if (!needsMigration) payload.sort_order = nextOrder;
     const { error } = await supabase.from('locations').insert(payload);
@@ -901,26 +971,11 @@ function LocationManager({ onBack }) {
     load();
   }
 
-  // Swaps this location's sort_order with its neighbor in the currently
-  // displayed (already sorted) list and persists both — a simple, reliable
-  // reorder that needs no drag library and works identically with touch or
-  // mouse taps on the ▲▼ buttons.
-  async function moveLocation(index, direction) {
-    const swapWith = index + direction;
-    if (swapWith < 0 || swapWith >= locations.length) return;
+  async function handleReordered(newOrderIds) {
     if (needsMigration) { setMessage('Add the sort_order column first — see the setup note above.'); return; }
-
     setReordering(true);
-    const a = locations[index], b = locations[swapWith];
-    const aOrder = a.sort_order ?? index, bOrder = b.sort_order ?? swapWith;
-
-    const [r1, r2] = await Promise.all([
-      supabase.from('locations').update({ sort_order: bOrder }).eq('id', a.id),
-      supabase.from('locations').update({ sort_order: aOrder }).eq('id', b.id),
-    ]);
+    await Promise.all(newOrderIds.map((id, index) => supabase.from('locations').update({ sort_order: index }).eq('id', id)));
     setReordering(false);
-
-    if (r1.error || r2.error) { setMessage('Reorder failed: ' + (r1.error || r2.error).message); return; }
     load();
   }
 
@@ -942,7 +997,6 @@ function LocationManager({ onBack }) {
           <span className="iconCircle iconGold">📍</span>
           <div><h2>Manage Locations</h2><p>Stations &amp; project sites used by the Route Planner (40–50 typical)</p></div>
         </div>
-
         <div className="dateField">
           <label className="fieldLabel">Location Name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. F Camp, Station 140" />
@@ -962,44 +1016,333 @@ function LocationManager({ onBack }) {
           <span>📍 Locations</span>
           <span className="countBadge pendingCount">{locations.length}</span>
         </div>
-        <p className="loadingText">Use ▲ ▼ to set the order locations appear in dropdowns &amp; the Route Planner.</p>
+        <p className="loadingText">Drag the ⠿ handle to reorder — this order drives every dropdown &amp; the Route Planner.</p>
         {loading && <p className="loadingText">Loading...</p>}
         {!loading && locations.length === 0 && <div className="emptyState">No locations added yet</div>}
-        {locations.map((loc, index) => (
-          <div className="adminComplaint locationRow" key={loc.id}>
-            {editingId === loc.id ? (
+
+        {!loading && locations.length > 0 && (
+          <DraggableList
+            items={locations}
+            getId={(l) => l.id}
+            disabled={reordering || needsMigration}
+            onReordered={handleReordered}
+            renderRow={(loc, index, dragHandleProps) => (
+              <div className="adminComplaint locationRow">
+                {editingId === loc.id ? (
+                  <>
+                    <div className="dateField">
+                      <label className="fieldLabel">Name</label>
+                      <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                    </div>
+                    <div className="dateField">
+                      <label className="fieldLabel">Address / Coordinates</label>
+                      <input value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="Address / lat,lng" />
+                    </div>
+                    <div className="completeRow">
+                      <button className="completeButton" onClick={() => saveEdit(loc.id)}>✓ Save</button>
+                      <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="locationRowBody">
+                      <div className="dragHandle" {...dragHandleProps} aria-label="Drag to reorder">⠿</div>
+                      <div className="locationRowInfo">
+                        <div className="adminComplaintTop"><strong>{loc.name}</strong></div>
+                        <div className="adminInfoGrid">
+                          <div className="adminInfo"><span>Address / Coordinates</span><strong>{loc.address || '-'}</strong></div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="completeRow">
+                      <a className="whatsappShareButton" href={buildWhatsAppShareUrl(loc)} target="_blank" rel="noopener noreferrer">💬 Share</a>
+                      <button className="btnPrimary" onClick={() => startEdit(loc)}>Edit</button>
+                      <button className="deleteComplaint locationCancelBtn" onClick={() => deleteLocation(loc.id)}>Delete</button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          />
+        )}
+      </section>
+    </>
+  );
+}
+
+/* =====================================================
+   ADMIN COMPLAINTS TABLE (Pending / Completed)
+   Item #7: real <table> (not a card grid) so headers and data columns
+   always line up — plus new Vehicle Location & Remarks columns.
+   Item #9: an Edit button on every row (pending AND completed) opens an
+   inline edit form, letting admins fix mistakes — including reverting a
+   wrongly-marked-complete entry back to Pending — without touching
+   Supabase directly.
+===================================================== */
+function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateChange, onMarkComplete, onEdit }) {
+  const [editingId, setEditingId] = useState(null);
+  const [form, setForm] = useState(null);
+
+  function startEdit(row) {
+    setEditingId(row.id);
+    setForm({
+      complaint_text: row.complaint_text || '',
+      vehicle_location: row.vehicle_location || VEHICLE_LOCATION_OPTIONS[0],
+      remarks: row.remarks || '',
+      complaint_date: row.complaint_date || getTodayString(),
+      completed_date: row.completed_date || '',
+      status: row.status,
+    });
+  }
+  function cancelEdit() { setEditingId(null); setForm(null); }
+  async function saveEdit(id) {
+    const patch = { ...form };
+    if (patch.status === 'Pending') patch.completed_date = null;
+    if (patch.status === 'Completed' && !patch.completed_date) patch.completed_date = getTodayString();
+    await onEdit(id, patch);
+    setEditingId(null); setForm(null);
+  }
+
+  const isPending = variant === 'pending';
+  const colCount = isPending ? 9 : 8;
+
+  return (
+    <div className="reportTableWrapper">
+      <table className="reportTable">
+        <thead>
+          <tr>
+            <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
+            <th>Vehicle Location</th><th>Complaint Date</th>
+            {!isPending && <th>Completed Date</th>}
+            <th>Days</th><th>Remarks</th>
+            <th>{isPending ? 'Mark Completed' : 'Edit'}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 && (
+            <tr><td colSpan={colCount} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>
+              {isPending ? 'No pending complaints 🎉' : 'No completed complaints yet'}
+            </td></tr>
+          )}
+          {rows.map((r, i) => editingId === r.id ? (
+            <tr key={r.id}>
+              <td colSpan={colCount}>
+                <div className="editRowForm">
+                  <div className="dateField">
+                    <label className="fieldLabel">Complaint</label>
+                    <textarea rows={2} value={form.complaint_text} onChange={(e) => setForm({ ...form, complaint_text: e.target.value })} />
+                  </div>
+                  <div className="editRowGrid">
+                    <div className="dateField">
+                      <label className="fieldLabel">Vehicle Location</label>
+                      <select value={form.vehicle_location} onChange={(e) => setForm({ ...form, vehicle_location: e.target.value })}>
+                        {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+                      </select>
+                    </div>
+                    <div className="dateField">
+                      <label className="fieldLabel">Status</label>
+                      <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+                        <option value="Pending">Pending</option>
+                        <option value="Completed">Completed</option>
+                      </select>
+                    </div>
+                    <div className="dateField">
+                      <label className="fieldLabel">Complaint Date</label>
+                      <input type="date" value={form.complaint_date} onChange={(e) => setForm({ ...form, complaint_date: e.target.value })} />
+                    </div>
+                    {form.status === 'Completed' && (
+                      <div className="dateField">
+                        <label className="fieldLabel">Completed Date</label>
+                        <input type="date" value={form.completed_date || getTodayString()} onChange={(e) => setForm({ ...form, completed_date: e.target.value })} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="dateField">
+                    <label className="fieldLabel">Remarks</label>
+                    <textarea rows={2} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} placeholder="Optional notes" />
+                  </div>
+                  <div className="completeRow">
+                    <button className="completeButton" onClick={() => saveEdit(r.id)}>✓ Save</button>
+                    <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
+                  </div>
+                </div>
+              </td>
+            </tr>
+          ) : (
+            <tr key={r.id}>
+              <td>{i + 1}</td>
+              <td>{r.vehicles?.plate_no || '-'}</td>
+              <td>{driverLabel(r)}</td>
+              <td className="reportComplaintCell">{r.complaint_text}</td>
+              <td>{r.vehicle_location || '-'}</td>
+              <td>{formatDMY(r.complaint_date)}</td>
+              {!isPending && <td>{formatDMY(r.completed_date)}</td>}
+              <td>{daysBetween(r.complaint_date, isPending ? null : r.completed_date)}</td>
+              <td className="reportComplaintCell">{r.remarks || '-'}</td>
+              <td>
+                {isPending ? (
+                  <div className="markCompleteCell">
+                    <input type="date" value={completedDates[r.id] || getTodayString()} onChange={(e) => onCompletedDateChange(r.id, e.target.value)} />
+                    <button className="completeButton" onClick={() => onMarkComplete(r.id)}>✓ Complete</button>
+                    <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
+                  </div>
+                ) : (
+                  <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* =====================================================
+   MANAGE USERS (admin-only)
+   Item #10 (part): create drivers/admins from inside the app instead of
+   the Supabase dashboard, and reset a user's password from here too.
+===================================================== */
+function AdminUserManager({ onBack, currentUser }) {
+  const [users, setUsers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [message, setMessage] = useState('');
+
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('driver');
+  const [gsNo, setGsNo] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editRole, setEditRole] = useState('driver');
+  const [editGsNo, setEditGsNo] = useState('');
+  const [editPassword, setEditPassword] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true); setMessage('');
+    const { data, error } = await supabase.from('users').select('*').order('username', { ascending: true });
+    if (error) { setMessage('Load failed: ' + error.message); setLoading(false); return; }
+    setUsers(data || []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function addUser() {
+    if (!username.trim() || !password.trim() || !name.trim()) { setMessage('Username, password, and name are all required.'); return; }
+    if (role === 'driver' && !gsNo.trim()) { setMessage('GS No is required for driver accounts.'); return; }
+
+    setSaving(true);
+    const { error } = await supabase.from('users').insert({
+      username: username.trim(), password: password.trim(), name: name.trim(),
+      role, gs_no: role === 'driver' ? gsNo.trim() : null,
+    });
+    setSaving(false);
+    if (error) { setMessage(error.message.includes('duplicate') ? 'That username already exists.' : 'Save failed: ' + error.message); return; }
+    setUsername(''); setPassword(''); setName(''); setGsNo(''); setRole('driver');
+    load();
+  }
+
+  function startEdit(u) {
+    setEditingId(u.id); setEditName(u.name); setEditRole(u.role); setEditGsNo(u.gs_no || ''); setEditPassword('');
+  }
+  function cancelEdit() { setEditingId(null); }
+
+  async function saveEdit(id) {
+    const patch = { name: editName.trim(), role: editRole, gs_no: editRole === 'driver' ? editGsNo.trim() : null };
+    if (editPassword.trim()) patch.password = editPassword.trim();
+    const { error } = await supabase.from('users').update(patch).eq('id', id);
+    if (error) { setMessage('Update failed: ' + error.message); return; }
+    setEditingId(null);
+    load();
+  }
+
+  async function deleteUser(u) {
+    if (u.id === currentUser.id) { setMessage("You can't delete the account you're signed in with."); return; }
+    const { error } = await supabase.from('users').delete().eq('id', u.id);
+    if (error) { setMessage('Delete failed: ' + error.message); return; }
+    load();
+  }
+
+  return (
+    <>
+      <div className="reportTopBar noPrint">
+        <button className="reportBackButton" onClick={onBack}>← Back to Dashboard</button>
+      </div>
+
+      <section className="card">
+        <div className="sectionTitle">
+          <span className="iconCircle iconIndigo">👥</span>
+          <div><h2>Manage Users</h2><p>Create admin or driver accounts without touching Supabase</p></div>
+        </div>
+
+        <div className="dateField">
+          <label className="fieldLabel">Username</label>
+          <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="e.g. driver12" />
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Temporary Password</label>
+          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="They should change this after first login" />
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Full Name</label>
+          <input value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Role</label>
+          <select value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="driver">Driver</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+        {role === 'driver' && (
+          <div className="dateField">
+            <label className="fieldLabel">GS No (must match an employees.gs_no)</label>
+            <input value={gsNo} onChange={(e) => setGsNo(e.target.value)} placeholder="e.g. GS1023" />
+          </div>
+        )}
+        <button className="submitButton" onClick={addUser} disabled={saving}>
+          {saving ? <span className="spinner light" /> : '＋ Add User'}
+        </button>
+        {message && <div className="errorMessage">⚠ {message}</div>}
+      </section>
+
+      <section className="card">
+        <div className="adminSectionTitle"><span>👥 Users</span><span className="countBadge pendingCount">{users.length}</span></div>
+        {loading && <p className="loadingText">Loading...</p>}
+        {!loading && users.map((u) => (
+          <div className="adminComplaint" key={u.id}>
+            {editingId === u.id ? (
               <>
+                <div className="dateField"><label className="fieldLabel">Full Name</label><input value={editName} onChange={(e) => setEditName(e.target.value)} /></div>
                 <div className="dateField">
-                  <label className="fieldLabel">Name</label>
-                  <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                  <label className="fieldLabel">Role</label>
+                  <select value={editRole} onChange={(e) => setEditRole(e.target.value)}>
+                    <option value="driver">Driver</option><option value="admin">Admin</option>
+                  </select>
                 </div>
-                <div className="dateField">
-                  <label className="fieldLabel">Address / Coordinates</label>
-                  <input value={editAddress} onChange={(e) => setEditAddress(e.target.value)} placeholder="Address / lat,lng" />
-                </div>
+                {editRole === 'driver' && (
+                  <div className="dateField"><label className="fieldLabel">GS No</label><input value={editGsNo} onChange={(e) => setEditGsNo(e.target.value)} /></div>
+                )}
+                <div className="dateField"><label className="fieldLabel">Reset Password (leave blank to keep current)</label><input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} /></div>
                 <div className="completeRow">
-                  <button className="completeButton" onClick={() => saveEdit(loc.id)}>✓ Save</button>
+                  <button className="completeButton" onClick={() => saveEdit(u.id)}>✓ Save</button>
                   <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
                 </div>
               </>
             ) : (
               <>
-                <div className="locationRowBody">
-                  <div className="reorderButtons">
-                    <button className="reorderButton" onClick={() => moveLocation(index, -1)} disabled={index === 0 || reordering} aria-label="Move up">▲</button>
-                    <button className="reorderButton" onClick={() => moveLocation(index, 1)} disabled={index === locations.length - 1 || reordering} aria-label="Move down">▼</button>
-                  </div>
-                  <div className="locationRowInfo">
-                    <div className="adminComplaintTop"><strong>{loc.name}</strong></div>
-                    <div className="adminInfoGrid">
-                      <div className="adminInfo"><span>Address / Coordinates</span><strong>{loc.address || '-'}</strong></div>
-                    </div>
-                  </div>
+                <div className="adminComplaintTop"><strong>{u.name}</strong><span className={u.role === 'admin' ? 'badge completedBadge' : 'badge pendingBadge'}>{u.role.toUpperCase()}</span></div>
+                <div className="adminInfoGrid">
+                  <div className="adminInfo"><span>Username</span><strong>{u.username}</strong></div>
+                  <div className="adminInfo"><span>GS No</span><strong>{u.gs_no || '-'}</strong></div>
                 </div>
                 <div className="completeRow">
-                  <a className="whatsappShareButton" href={buildWhatsAppShareUrl(loc)} target="_blank" rel="noopener noreferrer">💬 Share</a>
-                  <button className="btnPrimary" onClick={() => startEdit(loc)}>Edit</button>
-                  <button className="deleteComplaint locationCancelBtn" onClick={() => deleteLocation(loc.id)}>Delete</button>
+                  <button className="btnPrimary" onClick={() => startEdit(u)}>Edit</button>
+                  <button className="deleteComplaint locationCancelBtn" onClick={() => deleteUser(u)}>Delete</button>
                 </div>
               </>
             )}
@@ -1011,11 +1354,12 @@ function LocationManager({ onBack }) {
 }
 
 /* =====================================================
-   ADMIN DASHBOARD (pending / completed + mark-complete)
+   ADMIN DASHBOARD
 ===================================================== */
 function AdminDashboard({
   complaints, adminSearch, setAdminSearch, refreshing, message,
-  completedDates, handleCompletedDate, completeComplaint, onOpenReport, onOpenLocations, onRefresh,
+  completedDates, handleCompletedDate, completeComplaint, onEditComplaint,
+  onOpenReport, onOpenLocations, onOpenUsers, onRefresh,
 }) {
   const searchValue = adminSearch.trim().toLowerCase();
 
@@ -1053,6 +1397,7 @@ function AdminDashboard({
         <div className="dashboardCtaRow">
           <button className="reportCtaButton" onClick={onOpenReport}>📋 Open Full Report</button>
           <button className="reportCtaButton" onClick={onOpenLocations}>📍 Manage Locations</button>
+          <button className="reportCtaButton" onClick={onOpenUsers}>👥 Manage Users</button>
         </div>
       </section>
 
@@ -1071,38 +1416,18 @@ function AdminDashboard({
       <section className="card">
         <div className="adminSectionTitle"><span>🔴 Pending</span><span className="countBadge pendingCount">{pending.length}</span></div>
         {refreshing && <p className="loadingText">Loading complaints...</p>}
-        {!refreshing && pending.length === 0 && <div className="emptyState">No pending complaints 🎉</div>}
-        {pending.map((complaint) => (
-          <div className="adminComplaint" key={complaint.id}>
-            <div className="adminComplaintTop"><strong>{complaint.complaint_text}</strong><span className="badge pendingBadge">PENDING</span></div>
-            <div className="adminInfoGrid">
-              <div className="adminInfo"><span>Vehicle</span><strong>{complaint.vehicles?.plate_no || '-'}</strong></div>
-              <div className="adminInfo"><span>Driver</span><strong>{complaint.employees?.name || '-'}{complaint.employees?.gs_no ? ` (${complaint.employees.gs_no})` : ''}</strong></div>
-              <div className="adminInfo"><span>Complaint Date</span><strong>{formatDMY(complaint.complaint_date)}</strong></div>
-            </div>
-            <div className="daysBox">⏳ Pending for <strong>{daysBetween(complaint.complaint_date, null)} Days</strong></div>
-            <div className="completeRow">
-              <input type="date" value={completedDates[complaint.id] || getTodayString()} onChange={(e) => handleCompletedDate(complaint.id, e.target.value)} />
-              <button className="completeButton" onClick={() => completeComplaint(complaint.id)}>✓ Mark Completed</button>
-            </div>
-          </div>
-        ))}
+        {!refreshing && (
+          <AdminComplaintsTable
+            variant="pending" rows={pending}
+            completedDates={completedDates} onCompletedDateChange={handleCompletedDate}
+            onMarkComplete={completeComplaint} onEdit={onEditComplaint}
+          />
+        )}
       </section>
 
       <section className="card">
         <div className="adminSectionTitle"><span>🟢 Completed</span><span className="countBadge completedCount">{completed.length}</span></div>
-        {completed.length === 0 && <div className="emptyState">No completed complaints yet</div>}
-        {completed.map((complaint) => (
-          <div className="adminComplaint completedCard" key={complaint.id}>
-            <div className="adminComplaintTop"><strong>{complaint.complaint_text}</strong><span className="badge completedBadge">COMPLETED</span></div>
-            <div className="adminInfoGrid">
-              <div className="adminInfo"><span>Vehicle</span><strong>{complaint.vehicles?.plate_no || '-'}</strong></div>
-              <div className="adminInfo"><span>Complaint Date</span><strong>{formatDMY(complaint.complaint_date)}</strong></div>
-              <div className="adminInfo"><span>Completed Date</span><strong>{formatDMY(complaint.completed_date)}</strong></div>
-            </div>
-            <div className="daysBox completedDays">✓ Repair Duration: <strong>{daysBetween(complaint.complaint_date, complaint.completed_date)} Days</strong></div>
-          </div>
-        ))}
+        <AdminComplaintsTable variant="completed" rows={completed} onEdit={onEditComplaint} />
       </section>
     </>
   );
@@ -1112,19 +1437,31 @@ function AdminDashboard({
    MAIN APP
 ===================================================== */
 function App() {
-  const [currentUser, setCurrentUser] = useState(null);
-  const [mode, setMode] = useState('admin'); // admin-only: 'admin' dashboard vs 'driver' preview
+  // Item #10: currentUser is now persisted to localStorage on login and
+  // rehydrated on mount, so the app stays "logged in" across tab reloads,
+  // OS-triggered backgrounding (e.g. taking a phone call), etc. — the
+  // *only* thing that clears it is explicitly clicking Sign Out. There
+  // was no session/token expiry logic before this; the app was simply
+  // losing all state on any reload because it was never persisted.
+  const [currentUser, setCurrentUser] = useState(loadStoredUser);
+  const [mode, setMode] = useState('admin');
+  const [showPasswordPanel, setShowPasswordPanel] = useState(false);
 
   const [complaints, setComplaints] = useState([]);
   const [complaintsLoading, setComplaintsLoading] = useState(false);
   const [message, setMessage] = useState('');
   const [adminSearch, setAdminSearch] = useState('');
   const [completedDates, setCompletedDates] = useState({});
-  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report' | 'locations'
+  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report' | 'locations' | 'users'
 
-  // Single shared fetch — used by drivers (report tab), admins (dashboard +
-  // report). Employees/vehicles are pulled once per fetch via id lookup maps
-  // instead of repeated Array#find calls during render.
+  function login(user) { storeUser(user); setCurrentUser(user); }
+  function signOut() { storeUser(null); setCurrentUser(null); setAdminView('dashboard'); setShowPasswordPanel(false); }
+  function onCredentialsUpdated(updatedUser) {
+    const merged = { ...currentUser, ...updatedUser };
+    storeUser(merged);
+    setCurrentUser(merged);
+  }
+
   const fetchComplaints = useCallback(async () => {
     setMessage('');
     setComplaintsLoading(true);
@@ -1174,9 +1511,19 @@ function App() {
     fetchComplaints();
   }, [completedDates, fetchComplaints]);
 
+  // Item #9: generic admin edit — can change the complaint text, vehicle
+  // location, remarks, dates, and even flip status back to Pending to
+  // correct a mistaken "Mark Completed".
+  const editComplaint = useCallback(async (id, patch) => {
+    const { error } = await supabase.from('complaint_records').update(patch).eq('id', id);
+    if (error) { setMessage('Edit failed: ' + error.message); return; }
+    setMessage('✓ Complaint updated.');
+    fetchComplaints();
+  }, [fetchComplaints]);
+
   function handleCompletedDate(id, date) { setCompletedDates((prev) => ({ ...prev, [id]: date })); }
 
-  if (!currentUser) return <LoginScreen onLogin={setCurrentUser} />;
+  if (!currentUser) return <LoginScreen onLogin={login} />;
 
   return (
     <div className="app">
@@ -1185,12 +1532,23 @@ function App() {
           <div className="logoBadge"><img src={LOGO_URL} alt="SPIC DRIVE logo" className="logoImg" /></div>
           <div><div className="logo">SPIC DRIVE</div><div className="headerSub">Vehicle Service System</div></div>
         </div>
-        <button className="logoutButton" onClick={() => setCurrentUser(null)} title="Sign out">⏻</button>
+        {/* Item #1: text label instead of a unicode glyph (⏻ has no glyph
+            on some mobile fonts, rendering blank/"invisible"), flex-shrink:0
+            so it can never get squeezed by the brand text, and .header now
+            wraps instead of clipping if space is ever this tight. */}
+        <button className="logoutButton" onClick={signOut} title="Sign out">⏻ Sign Out</button>
       </header>
 
       <div className="roleBar">
         <span className="roleChip">🛡 {currentUser.name} · {currentUser.role === 'admin' ? 'Administrator' : 'Driver'}</span>
+        <button className="passwordToggleBtn" onClick={() => setShowPasswordPanel((v) => !v)}>🔑 Password</button>
       </div>
+
+      {showPasswordPanel && (
+        <div className="container" style={{ paddingTop: 14, paddingBottom: 0 }}>
+          <ChangePasswordPanel currentUser={currentUser} onClose={() => setShowPasswordPanel(false)} onUpdated={onCredentialsUpdated} />
+        </div>
+      )}
 
       {currentUser.role === 'admin' && (
         <div className="modeSwitch">
@@ -1200,39 +1558,25 @@ function App() {
       )}
 
       <main className="container">
-        {currentUser.role === 'driver' ? (
+        {currentUser.role === 'driver' || mode === 'driver' ? (
           <DriverExperience
-            currentUser={currentUser}
-            complaints={complaints}
-            complaintsLoading={complaintsLoading}
-            complaintsMessage={message}
-            onRefresh={fetchComplaints}
-          />
-        ) : mode === 'driver' ? (
-          <DriverExperience
-            currentUser={currentUser}
-            complaints={complaints}
-            complaintsLoading={complaintsLoading}
-            complaintsMessage={message}
-            onRefresh={fetchComplaints}
+            currentUser={currentUser} complaints={complaints} complaintsLoading={complaintsLoading}
+            complaintsMessage={message} onRefresh={fetchComplaints}
           />
         ) : adminView === 'report' ? (
           <ReportView complaints={complaints} loading={complaintsLoading} message={message} showBack onBack={() => setAdminView('dashboard')} />
         ) : adminView === 'locations' ? (
           <LocationManager onBack={() => setAdminView('dashboard')} />
+        ) : adminView === 'users' ? (
+          <AdminUserManager onBack={() => setAdminView('dashboard')} currentUser={currentUser} />
         ) : (
           <AdminDashboard
-            complaints={complaints}
-            adminSearch={adminSearch}
-            setAdminSearch={setAdminSearch}
-            refreshing={complaintsLoading}
-            message={message}
-            completedDates={completedDates}
-            handleCompletedDate={handleCompletedDate}
-            completeComplaint={completeComplaint}
-            onOpenReport={() => setAdminView('report')}
-            onOpenLocations={() => setAdminView('locations')}
-            onRefresh={fetchComplaints}
+            complaints={complaints} adminSearch={adminSearch} setAdminSearch={setAdminSearch}
+            refreshing={complaintsLoading} message={message}
+            completedDates={completedDates} handleCompletedDate={handleCompletedDate}
+            completeComplaint={completeComplaint} onEditComplaint={editComplaint}
+            onOpenReport={() => setAdminView('report')} onOpenLocations={() => setAdminView('locations')}
+            onOpenUsers={() => setAdminView('users')} onRefresh={fetchComplaints}
           />
         )}
       </main>
@@ -1244,86 +1588,3 @@ function App() {
 
 export default App;
 
-/* =====================================================
-   NOTES FOR PRODUCTION HARDENING (read before go-live)
-   ---------------------------------------------------
-   1. AUTH: This login checks a plaintext `password` column
-      directly from the client — fine for an internal MVP behind
-      a private link, NOT safe for anything wider. Before wider
-      rollout, migrate to Supabase Auth (email/password or magic
-      link) and drive `role` off a `profiles` table keyed to
-      auth.uid(), with Row Level Security policies restricting
-      writes to `complaint_records` to authenticated users.
-   2. `users` table (username, password, role, name, gs_no) is a
-      stepping stone to #1.
-   3. `locations` table (id, name, address) in Supabase for Manage
-      Locations / Route Planner — address can be a normal address
-      string or "lat,lng"; it's passed straight to Google Maps as
-      an origin/destination/waypoint.
-      ⚠ REQUIRED MIGRATION for location ordering (below):
-        alter table locations add column sort_order integer;
-      Until this is run, LocationManager shows a one-time setup
-      banner and falls back to alphabetical order; ▲▼ reordering
-      is disabled until the column exists.
-   4. PERF: complaints/vehicles/employees are fetched once per
-      login (or on explicit refresh/submit/complete) and shared
-      across the driver, report, and dashboard views via props —
-      no per-screen duplicate queries, and id lookups use Map
-      instead of repeated Array#find. Locations load separately
-      and only when the Route Planner / Manage Locations screen
-      actually mounts, so they never touch the complaints path.
-   5. FIXED: RoutePlanner's locationsById Map is keyed by
-      String(id), not the raw Supabase numeric id — <select>
-      elements always yield string values via e.target.value, so
-      a numeric-keyed Map silently failed every lookup. Any future
-      dropdown driven by a Supabase id should follow the same
-      pattern.
-   6. RESPONSIVE/TOUCH: see App.css — 16px form-field font size
-      (prevents iOS auto-zoom-on-focus), min-width:0 on flex/grid
-      children (prevents mobile overflow), 40px+ touch targets on
-      icon-only buttons, touch-action:manipulation app-wide (kills
-      the ~300ms tap delay + prevents double-tap zoom), and a
-      tablet/desktop breakpoint that widens the app shell and lays
-      the Route Planner's Start/End fields out side by side.
-   7. NEW — Location ordering: `locations.sort_order` (see #3)
-      drives display order everywhere (dropdowns, Route Planner,
-      Manage Locations, Quick Share). Admins reorder via ▲▼ in
-      Manage Locations, which swaps sort_order between adjacent
-      rows and persists both — no drag library needed, works with
-      touch or mouse identically.
-   8. NEW — WhatsApp share: buildWhatsAppShareUrl() opens
-      wa.me/?text=... (no fixed number — WhatsApp's own contact
-      picker handles "who"), prefilled with the location's name,
-      saved address, and a tappable Google Maps search link.
-      Available to admins (per-row "💬 Share" in Manage Locations)
-      and drivers (search-and-share "Quick Share" panel at the top
-      of the Route tab) — same helper, same behavior, both places.
-   9. NEW — Pre-map route summary: "📊 Calculate Distance & Time"
-      calls the free, keyless OSRM public routing server
-      (router.project-osrm.org) with the ordered start/stops/end
-      and shows a leg-by-leg + total distance/time breakdown
-      before "Open Route in Google Maps" is tapped. Two real
-      constraints, both surfaced to the user rather than hidden:
-        - OSRM does NOT geocode addresses — only points saved as
-          "lat,lng" in Manage Locations can be included. A
-          location saved as free-text address/name is named
-          explicitly in an error rather than silently dropped.
-        - The public OSRM demo server has no uptime/rate-limit SLA.
-          Fine for internal/moderate use; for guaranteed uptime at
-          scale, self-host OSRM or switch to a paid provider (e.g.
-          Google Distance Matrix, which also geocodes addresses —
-          would replace fetchRouteSummary() and need an API key).
-      The summary auto-invalidates (clears) whenever start/end/
-      stops change, so it can never describe a route that's since
-      been edited.
-  10. NEW — Searchable location picker: LocationPicker replaces the
-      plain <select> for Start/End/each stop in Route Planner.
-      Collapsed, it looks and sizes like a normal field; tapping it
-      opens a text search over name + address with a scrollable
-      filtered list (max-height 260px) — built for the 40-50+
-      location lists this app expects, where scrolling a native
-      dropdown to find one entry is painful, especially on mobile.
-      No overlay/portal or click-outside listener — it expands
-      inline and collapses on selection or Cancel, so there's
-      nothing to mis-position on a small screen.
-===================================================== */
