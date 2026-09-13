@@ -2,18 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from './supabaseClient';
 import './App.css';
 
-// Logo lives in /public, referenced by plain URL (not bundled/imported).
 const LOGO_URL = '/spicdrive-logo.png';
-
-// Session persistence key — see note #10 at the bottom of this file re:
-// why this exists (there was no session persistence at all before).
 const SESSION_KEY = 'spicdrive_current_user';
-
 const VEHICLE_LOCATION_OPTIONS = ['In Workshop', 'Running in Camp'];
 
-/* =====================================================
-   HELPERS
-===================================================== */
+/* ---------------- helpers ---------------- */
 function getTodayString() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -36,29 +29,24 @@ function toMap(rows) {
   (rows || []).forEach((r) => m.set(r.id, r));
   return m;
 }
-
 function loadStoredUser() {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
     return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    return null;
-  }
+  } catch (e) { return null; }
 }
 function storeUser(user) {
   try {
     if (user) localStorage.setItem(SESSION_KEY, JSON.stringify(user));
     else localStorage.removeItem(SESSION_KEY);
-  } catch (e) { /* storage unavailable (private mode etc.) — session just won't persist */ }
+  } catch (e) { /* private-browsing mode: session just won't persist */ }
 }
 
 async function fetchLocationsData() {
   const primary = await supabase.from('locations').select('*')
     .order('sort_order', { ascending: true, nullsFirst: false })
     .order('name', { ascending: true });
-
   if (!primary.error) return { data: primary.data || [], error: null, needsSortOrderColumn: false };
-
   const fallback = await supabase.from('locations').select('*').order('name', { ascending: true });
   return { data: fallback.data || [], error: fallback.error, needsSortOrderColumn: true };
 }
@@ -78,8 +66,6 @@ function buildWhatsAppShareUrl(location) {
   return `https://wa.me/?text=${encodeURIComponent(lines.join('\n'))}`;
 }
 
-// Straight-line (haversine) distance in km — used ONLY as a fallback when
-// the OSRM routing service can't be reached (see fetchRouteSummary below).
 function haversineKm(a, b) {
   const R = 6371;
   const dLat = (b.lat - a.lat) * Math.PI / 180;
@@ -89,15 +75,8 @@ function haversineKm(a, b) {
   return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }
 
-// Queries the free, keyless OSRM public routing server for the ordered
-// sequence of points. Some office/corporate networks block or proxy-filter
-// arbitrary external domains like router.project-osrm.org (this is a
-// network/firewall policy, not something fixable from inside the app) —
-// so on ANY fetch failure (blocked, timed out, CORS, offline) this now
-// falls back to a straight-line (haversine) distance + a conservative
-// average-speed time estimate, clearly labeled as an estimate, instead of
-// just failing. Real road-network distance is used whenever OSRM IS
-// reachable; the estimate only kicks in when it isn't.
+// Falls back to a straight-line + assumed-speed estimate if OSRM can't be
+// reached (e.g. blocked by a restrictive network) instead of just failing.
 async function fetchRouteSummary(points) {
   const missing = points.filter((p) => !parseLatLng(p));
   if (missing.length) {
@@ -113,7 +92,6 @@ async function fetchRouteSummary(points) {
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timeout);
     const json = await res.json();
-
     if (json.code === 'Ok' && json.routes && json.routes[0]) {
       const route = json.routes[0];
       const legs = route.legs.map((leg, i) => ({
@@ -122,12 +100,8 @@ async function fetchRouteSummary(points) {
       }));
       return { legs, totalKm: route.distance / 1000, totalMin: route.duration / 60, estimated: false };
     }
-  } catch (e) {
-    // fall through to the estimate below — network blocked, timed out, or CORS
-  }
+  } catch (e) { /* fall through to estimate below */ }
 
-  // Fallback: straight-line distance, ~40 km/h assumed average (industrial
-  // site / camp roads) — clearly flagged as an estimate in the UI.
   const AVG_SPEED_KMH = 40;
   const coords = points.map(parseLatLng);
   const legs = [];
@@ -151,15 +125,37 @@ function buildGoogleMapsUrl(origin, destination, waypoints) {
   const originStr = encodeURIComponent(formatMapPoint(origin));
   const destinationStr = encodeURIComponent(formatMapPoint(destination));
   const stops = waypoints.map(formatMapPoint).filter(Boolean).map(encodeURIComponent);
-
   let url = `https://www.google.com/maps/dir/?api=1&origin=${originStr}&destination=${destinationStr}&travelmode=driving`;
   if (stops.length) url += `&waypoints=${stops.join('|')}`;
   return url;
 }
 
-/* =====================================================
-   LOGIN SCREEN
-===================================================== */
+/* ---------------- password field with show/hide toggle (item #3) ---------------- */
+function PasswordInput({ value, onChange, placeholder, autoComplete, dark }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className={dark ? 'passwordFieldWrap passwordFieldDark' : 'passwordFieldWrap'}>
+      <input
+        type={show ? 'text' : 'password'}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        autoComplete={autoComplete}
+      />
+      <button
+        type="button"
+        className="passwordToggleIcon"
+        onClick={() => setShow((s) => !s)}
+        tabIndex={-1}
+        aria-label={show ? 'Hide password' : 'Show password'}
+      >
+        {show ? '🙈' : '👁️'}
+      </button>
+    </div>
+  );
+}
+
+/* ---------------- login ---------------- */
 function LoginScreen({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -170,10 +166,8 @@ function LoginScreen({ onLogin }) {
     e.preventDefault();
     if (!username.trim() || !password) { setError('Enter both username and password.'); return; }
     setLoading(true); setError('');
-
     const { data, error: err } = await supabase
       .from('users').select('*').eq('username', username.trim()).eq('password', password).maybeSingle();
-
     setLoading(false);
     if (err) { setError(err.message); return; }
     if (!data) { setError('Incorrect username or password.'); return; }
@@ -194,9 +188,7 @@ function LoginScreen({ onLogin }) {
             <input value={username} onChange={(e) => setUsername(e.target.value)} placeholder="Enter username" autoComplete="username" />
           </div>
           <label className="loginLabel">Password</label>
-          <div className="loginInputRow">
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" />
-          </div>
+          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" dark />
           {error && <div className="loginError">⚠ {error}</div>}
           <button className="loginButton" type="submit" disabled={loading}>
             {loading ? <span className="spinner light" /> : 'Sign In'}
@@ -207,9 +199,7 @@ function LoginScreen({ onLogin }) {
   );
 }
 
-/* =====================================================
-   CHANGE PASSWORD (any logged-in user)
-===================================================== */
+/* ---------------- change password ---------------- */
 function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newUsername, setNewUsername] = useState(currentUser.username);
@@ -226,8 +216,6 @@ function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
     if (newPassword && newPassword !== confirmPassword) { setIsError(true); setMessage('New passwords do not match.'); return; }
 
     setSaving(true);
-    // Re-check against the live row, not the in-memory copy, in case it
-    // changed since login (e.g. an admin reset it).
     const { data: fresh, error: fetchErr } = await supabase.from('users').select('*').eq('id', currentUser.id).maybeSingle();
     if (fetchErr || !fresh) { setSaving(false); setIsError(true); setMessage('Could not verify your account.'); return; }
     if (fresh.password !== currentPassword) { setSaving(false); setIsError(true); setMessage('Current password is incorrect.'); return; }
@@ -257,7 +245,7 @@ function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
 
       <div className="dateField">
         <label className="fieldLabel">Current Password</label>
-        <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Required to confirm it's you" />
+        <PasswordInput value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Required to confirm it's you" autoComplete="current-password" />
       </div>
       <div className="dateField">
         <label className="fieldLabel">Username</label>
@@ -265,12 +253,12 @@ function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
       </div>
       <div className="dateField">
         <label className="fieldLabel">New Password (leave blank to keep current)</label>
-        <input type="password" value={newPassword} onChange={(e) => setNewPassword(e.target.value)} />
+        <PasswordInput value={newPassword} onChange={(e) => setNewPassword(e.target.value)} autoComplete="new-password" />
       </div>
       {newPassword && (
         <div className="dateField">
           <label className="fieldLabel">Confirm New Password</label>
-          <input type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} />
+          <PasswordInput value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} autoComplete="new-password" />
         </div>
       )}
 
@@ -286,12 +274,7 @@ function ChangePasswordPanel({ currentUser, onClose, onUpdated }) {
   );
 }
 
-/* =====================================================
-   SUBMIT COMPLAINT PANEL
-   Complaint Date + Vehicle Location moved above the complaint list
-   itself (item #2), so the "when/where" context is filled in before
-   describing the problem, not after.
-===================================================== */
+/* ---------------- submit complaint ---------------- */
 function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   const [gsNo, setGsNo] = useState(currentUser.role === 'driver' ? (currentUser.gs_no || '') : '');
   const [employee, setEmployee] = useState(null);
@@ -344,7 +327,6 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
     if (!employee) return setSaveMessage('Please search and select an employee first.');
     if (!vehicle) return setSaveMessage('Please search and select a vehicle first.');
     if (!complaintDate) return setSaveMessage('Please select a complaint date.');
-
     const valid = complaints.map((t) => t.trim()).filter(Boolean);
     if (!valid.length) return setSaveMessage('Please enter at least one complaint.');
 
@@ -448,13 +430,7 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   );
 }
 
-/* =====================================================
-   REPORT VIEW (read-only)
-   Column order per spec: # · Vehicle · Driver (GS No first) · Complaint ·
-   Vehicle Location · Complaint Date · Completed Date · Status · Days ·
-   Remarks. Used by drivers (always, read-only) and admins ("Open Full
-   Report", read-only there too — editing lives only in AdminDashboard).
-===================================================== */
+/* ---------------- report view (read-only) ---------------- */
 const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
 
 function driverLabel(c) {
@@ -569,9 +545,7 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
   );
 }
 
-/* =====================================================
-   SEARCHABLE LOCATION PICKER (unchanged)
-===================================================== */
+/* ---------------- searchable location picker ---------------- */
 function LocationPicker({ locations, valueId, onSelect, placeholder }) {
   const [editing, setEditing] = useState(false);
   const [query, setQuery] = useState('');
@@ -625,13 +599,7 @@ function LocationPicker({ locations, valueId, onSelect, placeholder }) {
   );
 }
 
-/* =====================================================
-   QUICK SHARE (WhatsApp)
-   Item #5: shows ONLY the clean location name in the list — no raw
-   lat,lng (or address) line underneath. The share message itself still
-   includes the address/coordinates (that's useful context for whoever
-   receives it on WhatsApp); it's just not shown in this on-screen list.
-===================================================== */
+/* ---------------- quick share (WhatsApp) ---------------- */
 function QuickShareLocations({ locations }) {
   const [q, setQ] = useState('');
 
@@ -665,10 +633,7 @@ function QuickShareLocations({ locations }) {
   );
 }
 
-/* =====================================================
-   ROUTE PLANNER (driver-only tab)
-   Item #4: Route Planner card renders first, Quick Share second.
-===================================================== */
+/* ---------------- route planner ---------------- */
 function RoutePlanner() {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -810,10 +775,7 @@ function RoutePlanner() {
   );
 }
 
-/* =====================================================
-   DRIVER EXPERIENCE
-   Item #3: renamed tab labels. Item #4 handled inside RoutePlanner.
-===================================================== */
+/* ---------------- driver experience ---------------- */
 function DriverExperience({ currentUser, complaints, complaintsLoading, complaintsMessage, onRefresh }) {
   const [tab, setTab] = useState('submit');
 
@@ -831,12 +793,7 @@ function DriverExperience({ currentUser, complaints, complaintsLoading, complain
   );
 }
 
-/* =====================================================
-   DRAGGABLE LIST (Pointer Events — mouse + touch, no library)
-   Generic reorder wrapper: caller supplies the row content via
-   renderRow(item, index, dragHandleProps); this component only owns the
-   drag mechanics and calls onReordered(newOrderOfIds) once, on release.
-===================================================== */
+/* ---------------- draggable list (pointer events — mouse + touch) ---------------- */
 function DraggableList({ items, getId, onReordered, disabled, renderRow }) {
   const [order, setOrder] = useState(items.map(getId));
   const [draggingId, setDraggingId] = useState(null);
@@ -899,12 +856,7 @@ function DraggableList({ items, getId, onReordered, disabled, renderRow }) {
   );
 }
 
-/* =====================================================
-   MANAGE LOCATIONS (admin-only)
-   Item #11: ▲▼ buttons replaced with a drag handle (⠿) using
-   DraggableList above — works with mouse drag on desktop and touch drag
-   on mobile via the same Pointer Events, no extra library.
-===================================================== */
+/* ---------------- manage locations (admin) ---------------- */
 function LocationManager({ onBack }) {
   const [locations, setLocations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1070,15 +1022,7 @@ function LocationManager({ onBack }) {
   );
 }
 
-/* =====================================================
-   ADMIN COMPLAINTS TABLE (Pending / Completed)
-   Item #7: real <table> (not a card grid) so headers and data columns
-   always line up — plus new Vehicle Location & Remarks columns.
-   Item #9: an Edit button on every row (pending AND completed) opens an
-   inline edit form, letting admins fix mistakes — including reverting a
-   wrongly-marked-complete entry back to Pending — without touching
-   Supabase directly.
-===================================================== */
+/* ---------------- admin complaints table (pending / completed) ---------------- */
 function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateChange, onMarkComplete, onEdit }) {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(null);
@@ -1198,11 +1142,7 @@ function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateCh
   );
 }
 
-/* =====================================================
-   MANAGE USERS (admin-only)
-   Item #10 (part): create drivers/admins from inside the app instead of
-   the Supabase dashboard, and reset a user's password from here too.
-===================================================== */
+/* ---------------- manage users (admin) ---------------- */
 function AdminUserManager({ onBack, currentUser }) {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1285,7 +1225,7 @@ function AdminUserManager({ onBack, currentUser }) {
         </div>
         <div className="dateField">
           <label className="fieldLabel">Temporary Password</label>
-          <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="They should change this after first login" />
+          <PasswordInput value={password} onChange={(e) => setPassword(e.target.value)} placeholder="They should change this after first login" />
         </div>
         <div className="dateField">
           <label className="fieldLabel">Full Name</label>
@@ -1327,7 +1267,10 @@ function AdminUserManager({ onBack, currentUser }) {
                 {editRole === 'driver' && (
                   <div className="dateField"><label className="fieldLabel">GS No</label><input value={editGsNo} onChange={(e) => setEditGsNo(e.target.value)} /></div>
                 )}
-                <div className="dateField"><label className="fieldLabel">Reset Password (leave blank to keep current)</label><input value={editPassword} onChange={(e) => setEditPassword(e.target.value)} /></div>
+                <div className="dateField">
+                  <label className="fieldLabel">Reset Password (leave blank to keep current)</label>
+                  <PasswordInput value={editPassword} onChange={(e) => setEditPassword(e.target.value)} />
+                </div>
                 <div className="completeRow">
                   <button className="completeButton" onClick={() => saveEdit(u.id)}>✓ Save</button>
                   <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
@@ -1353,9 +1296,7 @@ function AdminUserManager({ onBack, currentUser }) {
   );
 }
 
-/* =====================================================
-   ADMIN DASHBOARD
-===================================================== */
+/* ---------------- admin dashboard ---------------- */
 function AdminDashboard({
   complaints, adminSearch, setAdminSearch, refreshing, message,
   completedDates, handleCompletedDate, completeComplaint, onEditComplaint,
@@ -1433,16 +1374,8 @@ function AdminDashboard({
   );
 }
 
-/* =====================================================
-   MAIN APP
-===================================================== */
+/* ---------------- main app ---------------- */
 function App() {
-  // Item #10: currentUser is now persisted to localStorage on login and
-  // rehydrated on mount, so the app stays "logged in" across tab reloads,
-  // OS-triggered backgrounding (e.g. taking a phone call), etc. — the
-  // *only* thing that clears it is explicitly clicking Sign Out. There
-  // was no session/token expiry logic before this; the app was simply
-  // losing all state on any reload because it was never persisted.
   const [currentUser, setCurrentUser] = useState(loadStoredUser);
   const [mode, setMode] = useState('admin');
   const [showPasswordPanel, setShowPasswordPanel] = useState(false);
@@ -1452,7 +1385,7 @@ function App() {
   const [message, setMessage] = useState('');
   const [adminSearch, setAdminSearch] = useState('');
   const [completedDates, setCompletedDates] = useState({});
-  const [adminView, setAdminView] = useState('dashboard'); // 'dashboard' | 'report' | 'locations' | 'users'
+  const [adminView, setAdminView] = useState('dashboard');
 
   function login(user) { storeUser(user); setCurrentUser(user); }
   function signOut() { storeUser(null); setCurrentUser(null); setAdminView('dashboard'); setShowPasswordPanel(false); }
@@ -1511,9 +1444,6 @@ function App() {
     fetchComplaints();
   }, [completedDates, fetchComplaints]);
 
-  // Item #9: generic admin edit — can change the complaint text, vehicle
-  // location, remarks, dates, and even flip status back to Pending to
-  // correct a mistaken "Mark Completed".
   const editComplaint = useCallback(async (id, patch) => {
     const { error } = await supabase.from('complaint_records').update(patch).eq('id', id);
     if (error) { setMessage('Edit failed: ' + error.message); return; }
@@ -1532,10 +1462,6 @@ function App() {
           <div className="logoBadge"><img src={LOGO_URL} alt="SPIC DRIVE logo" className="logoImg" /></div>
           <div><div className="logo">SPIC DRIVE</div><div className="headerSub">Vehicle Service System</div></div>
         </div>
-        {/* Item #1: text label instead of a unicode glyph (⏻ has no glyph
-            on some mobile fonts, rendering blank/"invisible"), flex-shrink:0
-            so it can never get squeezed by the brand text, and .header now
-            wraps instead of clipping if space is ever this tight. */}
         <button className="logoutButton" onClick={signOut} title="Sign out">⏻ Sign Out</button>
       </header>
 
@@ -1588,3 +1514,19 @@ function App() {
 
 export default App;
 
+/* ---------------- production notes ----------------
+   1. Auth checks a plaintext `password` column client-side — fine for an
+      internal MVP, not for a wider rollout. Migrate to Supabase Auth + RLS
+      eventually.
+   2. Required migrations:
+        alter table locations add column sort_order integer;
+        alter table complaint_records add column vehicle_location text;
+        alter table complaint_records add column remarks text;
+   3. Session is cached in localStorage ("spicdrive_current_user") so the
+      app stays signed in across reloads until Sign Out is clicked. Anyone
+      with device storage access can read that cached object (including
+      the password, per #1) — another reason #1 matters before wider use.
+   4. Route summary falls back to a straight-line estimate when OSRM is
+      unreachable (e.g. a restrictive office network) rather than failing.
+      This doesn't unblock the network itself — that's an IT/firewall call.
+---------------------------------------------------- */
