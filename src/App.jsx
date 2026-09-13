@@ -1022,10 +1022,95 @@ function LocationManager({ onBack }) {
   );
 }
 
-/* ---------------- admin complaints table (pending / completed) ---------------- */
+/* ---------------- admin complaints — card layout ---------------- */
+function ComplaintEditForm({ form, setForm, onSave, onCancel }) {
+  return (
+    <div className="complaintCard complaintCardEditing">
+      <div className="dateField">
+        <label className="fieldLabel">Complaint</label>
+        <textarea rows={2} value={form.complaint_text} onChange={(e) => setForm({ ...form, complaint_text: e.target.value })} />
+      </div>
+      <div className="editRowGrid">
+        <div className="dateField">
+          <label className="fieldLabel">Vehicle Location</label>
+          <select value={form.vehicle_location} onChange={(e) => setForm({ ...form, vehicle_location: e.target.value })}>
+            {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Status</label>
+          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+            <option value="Pending">Pending</option>
+            <option value="Completed">Completed</option>
+          </select>
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Complaint Date</label>
+          <input type="date" value={form.complaint_date} onChange={(e) => setForm({ ...form, complaint_date: e.target.value })} />
+        </div>
+        {form.status === 'Completed' && (
+          <div className="dateField">
+            <label className="fieldLabel">Completed Date</label>
+            <input type="date" value={form.completed_date || getTodayString()} onChange={(e) => setForm({ ...form, completed_date: e.target.value })} />
+          </div>
+        )}
+      </div>
+      <div className="dateField">
+        <label className="fieldLabel">Remarks</label>
+        <textarea rows={2} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} placeholder="Optional notes" />
+      </div>
+      <div className="completeRow">
+        <button className="completeButton" onClick={onSave}>✓ Save</button>
+        <button className="deleteComplaint locationCancelBtn" onClick={onCancel}>✕ Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function ComplaintCard({ row, index, isPending, completedDate, onCompletedDateChange, onMarkComplete, onStartEdit }) {
+  const days = daysBetween(row.complaint_date, isPending ? null : row.completed_date);
+  return (
+    <div className="complaintCard">
+      <div className="complaintCardTop">
+        <span className="complaintCardIndex">#{index + 1}</span>
+        <span className={isPending ? 'badge pendingBadge' : 'badge completedBadge'}>{row.status}</span>
+      </div>
+
+      <div className="complaintCardKV">
+        <div className="kvRow"><span className="kvLabel">Vehicle</span><strong className="kvValue">{row.vehicles?.plate_no || '-'}</strong></div>
+        <div className="kvRow"><span className="kvLabel">Driver</span><strong className="kvValue">{driverLabel(row)}</strong></div>
+        <div className="kvRow"><span className="kvLabel">Complaint</span><strong className="kvValue kvValueWrap">{row.complaint_text}</strong></div>
+        <div className="kvRow"><span className="kvLabel">Vehicle Location</span><strong className="kvValue">{row.vehicle_location || '-'}</strong></div>
+        <div className="kvRow"><span className="kvLabel">Complaint Date</span><strong className="kvValue">{formatDMY(row.complaint_date)}</strong></div>
+        {!isPending && (
+          <div className="kvRow"><span className="kvLabel">Completed Date</span><strong className="kvValue">{formatDMY(row.completed_date)}</strong></div>
+        )}
+        <div className="kvRow"><span className="kvLabel">Days</span><strong className="kvValue">{days}</strong></div>
+        <div className="kvRow"><span className="kvLabel">Remarks</span><strong className="kvValue kvValueWrap">{row.remarks || '-'}</strong></div>
+      </div>
+
+      <div className="complaintCardActions">
+        {isPending && (
+          <>
+            <input
+              type="date"
+              className="complaintCardDateInput"
+              value={completedDate || getTodayString()}
+              onChange={(e) => onCompletedDateChange(row.id, e.target.value)}
+            />
+            <button className="completeButton" onClick={() => onMarkComplete(row.id)}>✓ Complete</button>
+          </>
+        )}
+        <button className="btnPrimary editSmallBtn" onClick={() => onStartEdit(row)}>✏️ Edit</button>
+      </div>
+    </div>
+  );
+}
+
 function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateChange, onMarkComplete, onEdit }) {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(null);
+  const isPending = variant === 'pending';
 
   function startEdit(row) {
     setEditingId(row.id);
@@ -1047,97 +1132,38 @@ function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateCh
     setEditingId(null); setForm(null);
   }
 
-  const isPending = variant === 'pending';
-  const colCount = isPending ? 9 : 8;
+  if (rows.length === 0) {
+    return (
+      <div className="emptyState">
+        {isPending ? 'No pending complaints 🎉' : 'No completed complaints yet'}
+      </div>
+    );
+  }
 
   return (
-    <div className="reportTableWrapper">
-      <table className="reportTable">
-        <thead>
-          <tr>
-            <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
-            <th>Vehicle Location</th><th>Complaint Date</th>
-            {!isPending && <th>Completed Date</th>}
-            <th>Days</th><th>Remarks</th>
-            <th>{isPending ? 'Mark Completed' : 'Edit'}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 && (
-            <tr><td colSpan={colCount} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>
-              {isPending ? 'No pending complaints 🎉' : 'No completed complaints yet'}
-            </td></tr>
-          )}
-          {rows.map((r, i) => editingId === r.id ? (
-            <tr key={r.id}>
-              <td colSpan={colCount}>
-                <div className="editRowForm">
-                  <div className="dateField">
-                    <label className="fieldLabel">Complaint</label>
-                    <textarea rows={2} value={form.complaint_text} onChange={(e) => setForm({ ...form, complaint_text: e.target.value })} />
-                  </div>
-                  <div className="editRowGrid">
-                    <div className="dateField">
-                      <label className="fieldLabel">Vehicle Location</label>
-                      <select value={form.vehicle_location} onChange={(e) => setForm({ ...form, vehicle_location: e.target.value })}>
-                        {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                    </div>
-                    <div className="dateField">
-                      <label className="fieldLabel">Status</label>
-                      <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                        <option value="Pending">Pending</option>
-                        <option value="Completed">Completed</option>
-                      </select>
-                    </div>
-                    <div className="dateField">
-                      <label className="fieldLabel">Complaint Date</label>
-                      <input type="date" value={form.complaint_date} onChange={(e) => setForm({ ...form, complaint_date: e.target.value })} />
-                    </div>
-                    {form.status === 'Completed' && (
-                      <div className="dateField">
-                        <label className="fieldLabel">Completed Date</label>
-                        <input type="date" value={form.completed_date || getTodayString()} onChange={(e) => setForm({ ...form, completed_date: e.target.value })} />
-                      </div>
-                    )}
-                  </div>
-                  <div className="dateField">
-                    <label className="fieldLabel">Remarks</label>
-                    <textarea rows={2} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} placeholder="Optional notes" />
-                  </div>
-                  <div className="completeRow">
-                    <button className="completeButton" onClick={() => saveEdit(r.id)}>✓ Save</button>
-                    <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
-                  </div>
-                </div>
-              </td>
-            </tr>
-          ) : (
-            <tr key={r.id}>
-              <td>{i + 1}</td>
-              <td>{r.vehicles?.plate_no || '-'}</td>
-              <td>{driverLabel(r)}</td>
-              <td className="reportComplaintCell">{r.complaint_text}</td>
-              <td>{r.vehicle_location || '-'}</td>
-              <td>{formatDMY(r.complaint_date)}</td>
-              {!isPending && <td>{formatDMY(r.completed_date)}</td>}
-              <td>{daysBetween(r.complaint_date, isPending ? null : r.completed_date)}</td>
-              <td className="reportComplaintCell">{r.remarks || '-'}</td>
-              <td>
-                {isPending ? (
-                  <div className="markCompleteCell">
-                    <input type="date" value={completedDates[r.id] || getTodayString()} onChange={(e) => onCompletedDateChange(r.id, e.target.value)} />
-                    <button className="completeButton" onClick={() => onMarkComplete(r.id)}>✓ Complete</button>
-                    <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
-                  </div>
-                ) : (
-                  <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="complaintCardList">
+      {rows.map((r, i) =>
+        editingId === r.id ? (
+          <ComplaintEditForm
+            key={r.id}
+            form={form}
+            setForm={setForm}
+            onSave={() => saveEdit(r.id)}
+            onCancel={cancelEdit}
+          />
+        ) : (
+          <ComplaintCard
+            key={r.id}
+            row={r}
+            index={i}
+            isPending={isPending}
+            completedDate={completedDates?.[r.id]}
+            onCompletedDateChange={onCompletedDateChange}
+            onMarkComplete={onMarkComplete}
+            onStartEdit={startEdit}
+          />
+        )
+      )}
     </div>
   );
 }
@@ -1529,4 +1555,9 @@ export default App;
    4. Route summary falls back to a straight-line estimate when OSRM is
       unreachable (e.g. a restrictive office network) rather than failing.
       This doesn't unblock the network itself — that's an IT/firewall call.
+   5. Pending/Completed complaint lists on the Admin Dashboard render as
+      individual cards (see "admin complaints — card layout" section)
+      instead of a wide data table, so nothing gets squeezed/wrapped on
+      narrow laptop or tablet widths. The full sortable/filterable table
+      view is still available via "Open Full Report".
 ---------------------------------------------------- */
