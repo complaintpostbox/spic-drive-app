@@ -430,7 +430,11 @@ function SubmitComplaintPanel({ currentUser, onSubmitted }) {
   );
 }
 
-/* ---------------- report view (read-only) ---------------- */
+/* ---------------- complaint record card (mobile / tablet) ----------------
+   Layout follows the paper sketch: a two-column "label | value" card with
+   #, Vehicle, Driver Emp No, Name, Complaint, ..., Days, Remarks, and then
+   the Complete / Edit buttons. Shown below 1024px; the table takes over on
+   desktop (see the CSS block at the bottom of App.css).                     */
 const FILTER_LABELS = { all: 'All Complaints', pending: 'Pending Complaints', completed: 'Completed Complaints' };
 
 function driverLabel(c) {
@@ -438,6 +442,109 @@ function driverLabel(c) {
   return c.employees.gs_no ? `${c.employees.gs_no} ${c.employees.name}` : c.employees.name;
 }
 
+function RecordRow({ label, children, strong, muted }) {
+  let valueClass = 'recordValue';
+  if (strong) valueClass += ' recordValueStrong';
+  if (muted) valueClass += ' recordValueMuted';
+  return (
+    <div className="recordRow">
+      <div className="recordLabel">{label}</div>
+      <div className={valueClass}>{children}</div>
+    </div>
+  );
+}
+
+/* mode: 'report' (read-only, shows a Status row) | 'admin' (Complete / Edit buttons) */
+function ComplaintCard({ row, index, mode, completedDate, onCompletedDateChange, onMarkComplete, onStartEdit }) {
+  const isPending = row.status === 'Pending';
+  const days = daysBetween(row.complaint_date, isPending ? null : row.completed_date);
+
+  return (
+    <article className={isPending ? 'recordCard' : 'recordCard recordCardCompleted'}>
+      <RecordRow label="#">{index + 1}</RecordRow>
+      {mode === 'report' && (
+        <RecordRow label="Status">
+          <span className={isPending ? 'badge pendingBadge' : 'badge completedBadge'}>{(row.status || '').toUpperCase()}</span>
+        </RecordRow>
+      )}
+      <RecordRow label="Vehicle" strong>{row.vehicles?.plate_no || '-'}</RecordRow>
+      <RecordRow label="Driver Emp No">{row.employees?.gs_no || '-'}</RecordRow>
+      <RecordRow label="Name">{row.employees?.name || '-'}</RecordRow>
+      <RecordRow label="Complaint">{row.complaint_text || '-'}</RecordRow>
+      <RecordRow label="Location">{row.vehicle_location || '-'}</RecordRow>
+      <RecordRow label="Complaint Date">{formatDMY(row.complaint_date) || '-'}</RecordRow>
+      {!isPending && <RecordRow label="Completed Date">{formatDMY(row.completed_date) || '-'}</RecordRow>}
+      <RecordRow label="Days">{days}</RecordRow>
+      <RecordRow label="Remarks" muted={!row.remarks}>{row.remarks || '-'}</RecordRow>
+
+      {mode === 'admin' && (
+        <div className="recordActions">
+          {isPending && (
+            <div className="recordDateRow">
+              <label className="fieldLabel" htmlFor={`done-${row.id}`}>Completion date</label>
+              <input
+                id={`done-${row.id}`} type="date"
+                value={completedDate || getTodayString()}
+                onChange={(e) => onCompletedDateChange(row.id, e.target.value)}
+              />
+            </div>
+          )}
+          <div className={isPending ? 'recordActionButtons' : 'recordActionButtons recordActionSingle'}>
+            {isPending && <button className="completeButton" onClick={() => onMarkComplete(row.id)}>✓ Complete</button>}
+            <button className="btnPrimary" onClick={() => onStartEdit(row)}>✏️ Edit</button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+/* Shared edit form — used inside a table row (desktop) and inside a card (mobile). */
+function ComplaintEditForm({ form, setForm, onSave, onCancel }) {
+  return (
+    <div className="editRowForm">
+      <div className="dateField">
+        <label className="fieldLabel">Complaint</label>
+        <textarea rows={2} value={form.complaint_text} onChange={(e) => setForm({ ...form, complaint_text: e.target.value })} />
+      </div>
+      <div className="editRowGrid">
+        <div className="dateField">
+          <label className="fieldLabel">Vehicle Location</label>
+          <select value={form.vehicle_location} onChange={(e) => setForm({ ...form, vehicle_location: e.target.value })}>
+            {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
+          </select>
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Status</label>
+          <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
+            <option value="Pending">Pending</option>
+            <option value="Completed">Completed</option>
+          </select>
+        </div>
+        <div className="dateField">
+          <label className="fieldLabel">Complaint Date</label>
+          <input type="date" value={form.complaint_date} onChange={(e) => setForm({ ...form, complaint_date: e.target.value })} />
+        </div>
+        {form.status === 'Completed' && (
+          <div className="dateField">
+            <label className="fieldLabel">Completed Date</label>
+            <input type="date" value={form.completed_date || getTodayString()} onChange={(e) => setForm({ ...form, completed_date: e.target.value })} />
+          </div>
+        )}
+      </div>
+      <div className="dateField">
+        <label className="fieldLabel">Remarks</label>
+        <textarea rows={2} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} placeholder="Optional notes" />
+      </div>
+      <div className="completeRow">
+        <button className="completeButton" onClick={onSave}>✓ Save</button>
+        <button className="deleteComplaint locationCancelBtn" onClick={onCancel}>✕ Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------- report view (read-only) ---------------- */
 function ReportView({ complaints, loading, message, onBack, showBack }) {
   const [filter, setFilter] = useState('all');
   const [q, setQ] = useState('');
@@ -505,40 +612,52 @@ function ReportView({ complaints, loading, message, onBack, showBack }) {
         </div>
       </section>
 
-      <section className="card">
+      <section className="card recordHost">
         <div className="reportTableCaption">
           <span>{FILTER_LABELS[filter]}</span>
           <span className="reportTableCount">{loading ? 'Loading…' : `${rows.length} record${rows.length === 1 ? '' : 's'}`}</span>
         </div>
         {message && <div className="errorMessage">⚠ {message}</div>}
-        <div className="reportTableWrapper">
-          <table className="reportTable">
-            <thead>
-              <tr>
-                <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
-                <th>Vehicle Location</th><th>Complaint Date</th><th>Completed Date</th><th>Status</th><th>Days</th><th>Remarks</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((c, i) => (
-                <tr key={c.id}>
-                  <td>{i + 1}</td>
-                  <td>{c.vehicles?.plate_no || '-'}</td>
-                  <td>{driverLabel(c)}</td>
-                  <td className="reportComplaintCell">{c.complaint_text}</td>
-                  <td>{c.vehicle_location || '-'}</td>
-                  <td>{formatDMY(c.complaint_date) || '-'}</td>
-                  <td>{formatDMY(c.completed_date) || '—'}</td>
-                  <td><span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span></td>
-                  <td>{daysBetween(c.complaint_date, c.completed_date)}</td>
-                  <td className="reportComplaintCell">{c.remarks || '-'}</td>
+
+        {/* Mobile + tablet: one card per record */}
+        <div className="recordList">
+          {!loading && rows.length === 0 && <div className="emptyState">No matching records</div>}
+          {rows.map((c, i) => (
+            <ComplaintCard key={c.id} row={c} index={i} mode="report" />
+          ))}
+        </div>
+
+        {/* Desktop (and print): full table */}
+        <div className="tableView">
+          <div className="reportTableWrapper">
+            <table className="reportTable">
+              <thead>
+                <tr>
+                  <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
+                  <th>Vehicle Location</th><th>Complaint Date</th><th>Completed Date</th><th>Status</th><th>Days</th><th>Remarks</th>
                 </tr>
-              ))}
-              {!loading && rows.length === 0 && (
-                <tr><td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>No matching records</td></tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {rows.map((c, i) => (
+                  <tr key={c.id}>
+                    <td>{i + 1}</td>
+                    <td>{c.vehicles?.plate_no || '-'}</td>
+                    <td>{driverLabel(c)}</td>
+                    <td className="reportComplaintCell">{c.complaint_text}</td>
+                    <td>{c.vehicle_location || '-'}</td>
+                    <td>{formatDMY(c.complaint_date) || '-'}</td>
+                    <td>{formatDMY(c.completed_date) || '—'}</td>
+                    <td><span className={c.status === 'Pending' ? 'badge pendingBadge' : 'badge completedBadge'}>{c.status.toUpperCase()}</span></td>
+                    <td>{daysBetween(c.complaint_date, c.completed_date)}</td>
+                    <td className="reportComplaintCell">{c.remarks || '-'}</td>
+                  </tr>
+                ))}
+                {!loading && rows.length === 0 && (
+                  <tr><td colSpan={10} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>No matching records</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
     </div>
@@ -1022,8 +1141,10 @@ function LocationManager({ onBack }) {
   );
 }
 
-/* ---------------- admin complaints table (pending / completed) ---------------- */
-function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateChange, onMarkComplete, onEdit }) {
+/* ---------------- admin complaints (pending / completed) ----------------
+   Renders BOTH a card list (mobile/tablet) and a table (desktop). CSS shows
+   only one of them, so there is no JS resize logic to go wrong.            */
+function AdminComplaintsTable({ variant, rows, completedDates = {}, onCompletedDateChange, onMarkComplete, onEdit }) {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(null);
 
@@ -1048,97 +1169,85 @@ function AdminComplaintsTable({ variant, rows, completedDates, onCompletedDateCh
   }
 
   const isPending = variant === 'pending';
-  const colCount = isPending ? 9 : 8;
+  const colCount = isPending ? 9 : 10; // pending has no 'Completed Date' column
+  const emptyText = isPending ? 'No pending complaints 🎉' : 'No completed complaints yet';
 
   return (
-    <div className="reportTableWrapper">
-      <table className="reportTable">
-        <thead>
-          <tr>
-            <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
-            <th>Vehicle Location</th><th>Complaint Date</th>
-            {!isPending && <th>Completed Date</th>}
-            <th>Days</th><th>Remarks</th>
-            <th>{isPending ? 'Mark Completed' : 'Edit'}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 && (
-            <tr><td colSpan={colCount} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>
-              {isPending ? 'No pending complaints 🎉' : 'No completed complaints yet'}
-            </td></tr>
-          )}
-          {rows.map((r, i) => editingId === r.id ? (
-            <tr key={r.id}>
-              <td colSpan={colCount}>
-                <div className="editRowForm">
-                  <div className="dateField">
-                    <label className="fieldLabel">Complaint</label>
-                    <textarea rows={2} value={form.complaint_text} onChange={(e) => setForm({ ...form, complaint_text: e.target.value })} />
-                  </div>
-                  <div className="editRowGrid">
-                    <div className="dateField">
-                      <label className="fieldLabel">Vehicle Location</label>
-                      <select value={form.vehicle_location} onChange={(e) => setForm({ ...form, vehicle_location: e.target.value })}>
-                        {VEHICLE_LOCATION_OPTIONS.map((opt) => <option key={opt} value={opt}>{opt}</option>)}
-                      </select>
-                    </div>
-                    <div className="dateField">
-                      <label className="fieldLabel">Status</label>
-                      <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>
-                        <option value="Pending">Pending</option>
-                        <option value="Completed">Completed</option>
-                      </select>
-                    </div>
-                    <div className="dateField">
-                      <label className="fieldLabel">Complaint Date</label>
-                      <input type="date" value={form.complaint_date} onChange={(e) => setForm({ ...form, complaint_date: e.target.value })} />
-                    </div>
-                    {form.status === 'Completed' && (
-                      <div className="dateField">
-                        <label className="fieldLabel">Completed Date</label>
-                        <input type="date" value={form.completed_date || getTodayString()} onChange={(e) => setForm({ ...form, completed_date: e.target.value })} />
+    <>
+      {/* Mobile + tablet: cards */}
+      <div className="recordList">
+        {rows.length === 0 && <div className="emptyState">{emptyText}</div>}
+        {rows.map((r, i) => editingId === r.id && form ? (
+          <article key={r.id} className="recordCard recordCardEditing">
+            <div className="recordEditBody">
+              <ComplaintEditForm form={form} setForm={setForm} onSave={() => saveEdit(r.id)} onCancel={cancelEdit} />
+            </div>
+          </article>
+        ) : (
+          <ComplaintCard
+            key={r.id} row={r} index={i} mode="admin"
+            completedDate={completedDates[r.id]}
+            onCompletedDateChange={onCompletedDateChange}
+            onMarkComplete={onMarkComplete}
+            onStartEdit={startEdit}
+          />
+        ))}
+      </div>
+
+      {/* Desktop: table */}
+      <div className="tableView">
+        <div className="reportTableWrapper">
+          <table className="reportTable">
+            <thead>
+              <tr>
+                <th>#</th><th>Vehicle</th><th>Driver</th><th className="reportComplaintCell">Complaint</th>
+                <th>Vehicle Location</th><th>Complaint Date</th>
+                {!isPending && <th>Completed Date</th>}
+                <th>Days</th><th>Remarks</th>
+                <th>{isPending ? 'Mark Completed' : 'Edit'}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.length === 0 && (
+                <tr><td colSpan={colCount} style={{ textAlign: 'center', padding: '24px', color: 'var(--slate-500)' }}>
+                  {emptyText}
+                </td></tr>
+              )}
+              {rows.map((r, i) => editingId === r.id && form ? (
+                <tr key={r.id}>
+                  <td colSpan={colCount}>
+                    <ComplaintEditForm form={form} setForm={setForm} onSave={() => saveEdit(r.id)} onCancel={cancelEdit} />
+                  </td>
+                </tr>
+              ) : (
+                <tr key={r.id}>
+                  <td>{i + 1}</td>
+                  <td>{r.vehicles?.plate_no || '-'}</td>
+                  <td>{driverLabel(r)}</td>
+                  <td className="reportComplaintCell">{r.complaint_text}</td>
+                  <td>{r.vehicle_location || '-'}</td>
+                  <td>{formatDMY(r.complaint_date)}</td>
+                  {!isPending && <td>{formatDMY(r.completed_date)}</td>}
+                  <td>{daysBetween(r.complaint_date, isPending ? null : r.completed_date)}</td>
+                  <td className="reportComplaintCell">{r.remarks || '-'}</td>
+                  <td>
+                    {isPending ? (
+                      <div className="markCompleteCell">
+                        <input type="date" value={completedDates[r.id] || getTodayString()} onChange={(e) => onCompletedDateChange(r.id, e.target.value)} />
+                        <button className="completeButton" onClick={() => onMarkComplete(r.id)}>✓ Complete</button>
+                        <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
                       </div>
+                    ) : (
+                      <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
                     )}
-                  </div>
-                  <div className="dateField">
-                    <label className="fieldLabel">Remarks</label>
-                    <textarea rows={2} value={form.remarks} onChange={(e) => setForm({ ...form, remarks: e.target.value })} placeholder="Optional notes" />
-                  </div>
-                  <div className="completeRow">
-                    <button className="completeButton" onClick={() => saveEdit(r.id)}>✓ Save</button>
-                    <button className="deleteComplaint locationCancelBtn" onClick={cancelEdit}>✕ Cancel</button>
-                  </div>
-                </div>
-              </td>
-            </tr>
-          ) : (
-            <tr key={r.id}>
-              <td>{i + 1}</td>
-              <td>{r.vehicles?.plate_no || '-'}</td>
-              <td>{driverLabel(r)}</td>
-              <td className="reportComplaintCell">{r.complaint_text}</td>
-              <td>{r.vehicle_location || '-'}</td>
-              <td>{formatDMY(r.complaint_date)}</td>
-              {!isPending && <td>{formatDMY(r.completed_date)}</td>}
-              <td>{daysBetween(r.complaint_date, isPending ? null : r.completed_date)}</td>
-              <td className="reportComplaintCell">{r.remarks || '-'}</td>
-              <td>
-                {isPending ? (
-                  <div className="markCompleteCell">
-                    <input type="date" value={completedDates[r.id] || getTodayString()} onChange={(e) => onCompletedDateChange(r.id, e.target.value)} />
-                    <button className="completeButton" onClick={() => onMarkComplete(r.id)}>✓ Complete</button>
-                    <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
-                  </div>
-                ) : (
-                  <button className="btnPrimary editSmallBtn" onClick={() => startEdit(r)}>✏️ Edit</button>
-                )}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -1354,7 +1463,7 @@ function AdminDashboard({
         {message && <div className="saveMessage fadeIn">{message}</div>}
       </section>
 
-      <section className="card">
+      <section className="card recordHost">
         <div className="adminSectionTitle"><span>🔴 Pending</span><span className="countBadge pendingCount">{pending.length}</span></div>
         {refreshing && <p className="loadingText">Loading complaints...</p>}
         {!refreshing && (
@@ -1366,7 +1475,7 @@ function AdminDashboard({
         )}
       </section>
 
-      <section className="card">
+      <section className="card recordHost">
         <div className="adminSectionTitle"><span>🟢 Completed</span><span className="countBadge completedCount">{completed.length}</span></div>
         <AdminComplaintsTable variant="completed" rows={completed} onEdit={onEditComplaint} />
       </section>
@@ -1529,4 +1638,7 @@ export default App;
    4. Route summary falls back to a straight-line estimate when OSRM is
       unreachable (e.g. a restrictive office network) rather than failing.
       This doesn't unblock the network itself — that's an IT/firewall call.
+   5. Complaint lists render a card list (< 1024px) AND a table (>= 1024px);
+      the switch is pure CSS (.recordList / .tableView at the bottom of
+      App.css). Print always uses the table.
 ---------------------------------------------------- */
