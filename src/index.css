@@ -429,3 +429,40 @@ footer {
     flex-direction: column;
   }
 }
+line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.recordValueStrong { font-size: 15.5px; font-weight: 800; color: var(--indigo-600); }
+.recordValueMuted { color: var(--slate-500); font-weight: 500; }
+
+/* Action area at the bottom of pending / completed cards. */
+.recordActions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  background: var(--slate-50);
+}
+.recordDateRow { display: flex; align-items: center; gap: 10px; }
+.recordDateRow .fieldLabel { margin: 0; white-space: nowrap; }
+.recordDateRow input { flex: 1; min-height: 42px; }
+.recordActionButtons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.recordActionSingle { grid-template-columns: 1fr; }
+.recordActionButtons > button { width: 100%; min-width: 0; min-height: 46px; padding: 0 12px; }
+
+/* Inline edit form inside a card. */
+.recordEditBody { padding: 14px; }
+.recordEditBody .editRowForm { padding: 0; }
+
+@media (max-width: 360px) {
+  .recordRow { grid-template-columns: 92px minmax(0, 1fr); }
+  .recordLabel { padding: 10px 8px; font-size: 11.5px; }
+  .recordValue { padding: 10px 10px; font-size: 13.5px; }
+}
+
+/* ---------------- print: always print the table, never the cards ---------------- */
+@media print {
+  .recordList { display: none !important; }
+  .tableView { display: block !important; }
+  .reportTable { min-width: 0 !important; }
+}
